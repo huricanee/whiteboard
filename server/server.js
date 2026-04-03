@@ -364,6 +364,62 @@ app.get('/api/boards/:id', async (req, res) => {
   }
 });
 
+/* ================================================================
+   Bot-friendly read-only API (for Albert to query via WebFetch)
+   Returns compact JSON to minimize context usage.
+   ================================================================ */
+
+// Search nodes by text (case-insensitive substring match)
+app.get('/api/boards/:id/search', async (req, res) => {
+  const { id } = req.params;
+  const q = (req.query.q || '').toLowerCase();
+  if (!q) return res.json([]);
+  try {
+    const state = await loadBoardState(id);
+    const results = Object.values(state.nodes)
+      .filter(n => n.text && n.text.toLowerCase().includes(q))
+      .map(n => ({ id: n.id, text: n.text, x: n.x, y: n.y }));
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get N most recently added nodes (by ID sort — IDs are time-based)
+app.get('/api/boards/:id/recent', async (req, res) => {
+  const { id } = req.params;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  try {
+    const state = await loadBoardState(id);
+    const sorted = Object.values(state.nodes)
+      .sort((a, b) => (b.id || '').localeCompare(a.id || ''))
+      .slice(0, limit)
+      .map(n => ({ id: n.id, text: n.text }));
+    res.json(sorted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Compact graph: node names + connections (no coordinates, no strokes)
+app.get('/api/boards/:id/graph', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const state = await loadBoardState(id);
+    const nodes = Object.values(state.nodes).map(n => ({
+      id: n.id,
+      text: n.text || '(empty)',
+    }));
+    const edges = Object.values(state.arrows).map(a => ({
+      from: state.nodes[a.fromNodeId]?.text || a.fromNodeId,
+      to: state.nodes[a.toNodeId]?.text || a.toNodeId,
+    }));
+    res.json({ nodes, edges, nodeCount: nodes.length, edgeCount: edges.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- HTTP + WebSocket server ---
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
