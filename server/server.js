@@ -94,6 +94,21 @@ async function initDb() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS board_snapshots (
+        id SERIAL PRIMARY KEY,
+        board_id TEXT NOT NULL REFERENCES boards(id),
+        nodes JSONB NOT NULL DEFAULT '{}',
+        arrows JSONB NOT NULL DEFAULT '{}',
+        strokes JSONB NOT NULL DEFAULT '[]',
+        node_count INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_snapshots_board_time
+      ON board_snapshots(board_id, created_at DESC);
+    `);
     dbReady = true;
     console.log('Database tables initialized');
   } finally {
@@ -172,6 +187,54 @@ async function saveBoardState(boardId) {
     console.error(`Failed to save board ${boardId}:`, err.message);
   }
 }
+
+// --- Snapshots: auto-save every 5 minutes if board changed ---
+const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_SNAPSHOTS_PER_BOARD = 50;
+const lastSnapshotHash = new Map(); // boardId -> JSON hash of last snapshot
+
+function stateHash(state) {
+  // Quick hash: count nodes + first node text + arrow count
+  const nk = Object.keys(state.nodes);
+  return `${nk.length}:${nk[0] || ''}:${Object.keys(state.arrows).length}:${(state.strokes || []).length}`;
+}
+
+async function saveSnapshot(boardId) {
+  if (!pool || !dbReady) return;
+  const state = boardStates.get(boardId);
+  if (!state) return;
+
+  const hash = stateHash(state);
+  if (lastSnapshotHash.get(boardId) === hash) return; // no change
+  if (Object.keys(state.nodes).length === 0 && (state.strokes || []).length === 0) return; // empty board
+
+  try {
+    await pool.query(
+      `INSERT INTO board_snapshots (board_id, nodes, arrows, strokes, node_count)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [boardId, JSON.stringify(state.nodes), JSON.stringify(state.arrows),
+       JSON.stringify(state.strokes), Object.keys(state.nodes).length]
+    );
+    lastSnapshotHash.set(boardId, hash);
+
+    // Trim old snapshots
+    await pool.query(
+      `DELETE FROM board_snapshots WHERE board_id = $1 AND id NOT IN (
+        SELECT id FROM board_snapshots WHERE board_id = $1 ORDER BY created_at DESC LIMIT $2
+      )`,
+      [boardId, MAX_SNAPSHOTS_PER_BOARD]
+    );
+    console.log(`Snapshot saved for board ${boardId}`);
+  } catch (err) {
+    console.error(`Snapshot failed for ${boardId}:`, err.message);
+  }
+}
+
+const snapshotInterval = setInterval(async () => {
+  for (const boardId of boardStates.keys()) {
+    await saveSnapshot(boardId);
+  }
+}, SNAPSHOT_INTERVAL_MS);
 
 // Debounced save: flush all dirty boards every 2 seconds
 const saveInterval = setInterval(async () => {
@@ -361,6 +424,60 @@ app.get('/api/boards/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to get board:', err.message);
     res.status(500).json({ error: 'Failed to get board' });
+  }
+});
+
+/* ================================================================
+   Snapshot API — version history
+   ================================================================ */
+
+// List snapshots for a board
+app.get('/api/boards/:id/snapshots', async (req, res) => {
+  const { id } = req.params;
+  if (!pool || !dbReady) return res.json([]);
+  try {
+    const result = await pool.query(
+      `SELECT id, node_count, created_at FROM board_snapshots
+       WHERE board_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Restore a snapshot
+app.post('/api/boards/:id/snapshots/:snapshotId/restore', async (req, res) => {
+  const { id, snapshotId } = req.params;
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  try {
+    // Save current state as snapshot before restoring (safety net)
+    await saveSnapshot(id);
+
+    const result = await pool.query(
+      'SELECT nodes, arrows, strokes FROM board_snapshots WHERE id = $1 AND board_id = $2',
+      [snapshotId, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Snapshot not found' });
+
+    const snap = result.rows[0];
+    const state = boardStates.get(id) || { nodes: {}, arrows: {}, strokes: [], dirty: false };
+    state.nodes = snap.nodes || {};
+    state.arrows = snap.arrows || {};
+    state.strokes = snap.strokes || [];
+    state.dirty = true;
+    boardStates.set(id, state);
+
+    // Save immediately
+    await saveBoardState(id);
+
+    // Broadcast to all connected clients
+    broadcast(id, { type: 'state:undo', state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes } });
+
+    res.json({ ok: true, nodeCount: Object.keys(state.nodes).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
