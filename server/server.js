@@ -1,0 +1,447 @@
+require('dotenv').config();
+
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+const crypto = require('crypto');
+const { Pool } = require('pg');
+const { WebSocketServer } = require('ws');
+const url = require('url');
+
+// --- Config ---
+const PORT = process.env.PORT || 3000;
+const DB_SAVE_INTERVAL_MS = 2000;
+
+// --- Database ---
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('railway')
+    ? { rejectUnauthorized: false }
+    : undefined,
+});
+
+async function initDb() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS boards (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT 'Untitled',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS board_state (
+        board_id TEXT PRIMARY KEY REFERENCES boards(id),
+        nodes JSONB NOT NULL DEFAULT '{}',
+        arrows JSONB NOT NULL DEFAULT '{}',
+        strokes JSONB NOT NULL DEFAULT '[]',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('Database tables initialized');
+  } finally {
+    client.release();
+  }
+}
+
+// --- In-memory state ---
+// boardId -> { nodes: {}, arrows: {}, strokes: [], dirty: bool }
+const boardStates = new Map();
+// boardId -> Set<ws>
+const boardClients = new Map();
+// ws -> { boardId, userId, color }
+const clientInfo = new Map();
+
+// --- Helpers ---
+function generateId(len = 8) {
+  return crypto.randomBytes(len).toString('base64url').slice(0, len);
+}
+
+function randomColor() {
+  const colors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+    '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+    '#F1948A', '#82E0AA', '#F8C471', '#AED6F1', '#D7BDE2',
+  ];
+  return colors[Math.floor(Math.random() * colors.length)];
+}
+
+async function loadBoardState(boardId) {
+  if (boardStates.has(boardId)) {
+    return boardStates.get(boardId);
+  }
+  const result = await pool.query(
+    'SELECT nodes, arrows, strokes FROM board_state WHERE board_id = $1',
+    [boardId]
+  );
+  let state;
+  if (result.rows.length > 0) {
+    const row = result.rows[0];
+    state = {
+      nodes: row.nodes || {},
+      arrows: row.arrows || {},
+      strokes: row.strokes || [],
+      dirty: false,
+    };
+  } else {
+    state = { nodes: {}, arrows: {}, strokes: [], dirty: false };
+  }
+  boardStates.set(boardId, state);
+  return state;
+}
+
+async function saveBoardState(boardId) {
+  const state = boardStates.get(boardId);
+  if (!state || !state.dirty) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO board_state (board_id, nodes, arrows, strokes, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (board_id) DO UPDATE
+       SET nodes = $2, arrows = $3, strokes = $4, updated_at = NOW()`,
+      [boardId, JSON.stringify(state.nodes), JSON.stringify(state.arrows), JSON.stringify(state.strokes)]
+    );
+    await pool.query(
+      'UPDATE boards SET updated_at = NOW() WHERE id = $1',
+      [boardId]
+    );
+    state.dirty = false;
+  } catch (err) {
+    console.error(`Failed to save board ${boardId}:`, err.message);
+  }
+}
+
+// Debounced save: flush all dirty boards every 2 seconds
+const saveInterval = setInterval(async () => {
+  for (const [boardId, state] of boardStates) {
+    if (state.dirty) {
+      await saveBoardState(boardId);
+    }
+  }
+}, DB_SAVE_INTERVAL_MS);
+
+function broadcast(boardId, message, excludeWs) {
+  const clients = boardClients.get(boardId);
+  if (!clients) return;
+  const data = JSON.stringify(message);
+  for (const ws of clients) {
+    if (ws !== excludeWs && ws.readyState === 1) {
+      ws.send(data);
+    }
+  }
+}
+
+function applyDelta(state, msg) {
+  switch (msg.type) {
+    case 'node:add':
+      if (msg.node && msg.node.id) {
+        state.nodes[msg.node.id] = msg.node;
+        state.dirty = true;
+      }
+      break;
+
+    case 'node:update':
+      if (msg.id && state.nodes[msg.id]) {
+        Object.assign(state.nodes[msg.id], msg.updates);
+        state.dirty = true;
+      }
+      break;
+
+    case 'node:delete':
+      if (msg.id && state.nodes[msg.id]) {
+        delete state.nodes[msg.id];
+        state.dirty = true;
+      }
+      break;
+
+    case 'arrow:add':
+      if (msg.arrow && msg.arrow.id) {
+        state.arrows[msg.arrow.id] = msg.arrow;
+        state.dirty = true;
+      }
+      break;
+
+    case 'arrow:delete':
+      if (msg.id && state.arrows[msg.id]) {
+        delete state.arrows[msg.id];
+        state.dirty = true;
+      }
+      break;
+
+    case 'stroke:add':
+      if (msg.stroke) {
+        state.strokes.push(msg.stroke);
+        state.dirty = true;
+      }
+      break;
+
+    case 'stroke:delete':
+      if (msg.id) {
+        state.strokes = state.strokes.filter(s => s.id !== msg.id);
+        state.dirty = true;
+      }
+      break;
+
+    case 'stroke:pixel-erase':
+      if (Array.isArray(msg.deletedIds)) {
+        const deleteSet = new Set(msg.deletedIds);
+        state.strokes = state.strokes.filter(s => !deleteSet.has(s.id));
+      }
+      if (Array.isArray(msg.newStrokes)) {
+        state.strokes.push(...msg.newStrokes);
+      }
+      state.dirty = true;
+      break;
+
+    case 'state:undo':
+      if (msg.state) {
+        state.nodes = msg.state.nodes || {};
+        state.arrows = msg.state.arrows || {};
+        state.strokes = msg.state.strokes || [];
+        state.dirty = true;
+      }
+      break;
+
+    // cursor messages are broadcast-only, no state mutation
+    case 'cursor':
+      break;
+
+    default:
+      console.warn('Unknown message type:', msg.type);
+  }
+}
+
+// --- Express app ---
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/api/boards', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, name, created_at, updated_at FROM boards ORDER BY updated_at DESC'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Failed to list boards:', err.message);
+    res.status(500).json({ error: 'Failed to list boards' });
+  }
+});
+
+app.post('/api/boards', async (req, res) => {
+  const id = generateId();
+  const name = req.body?.name || 'Untitled';
+  try {
+    await pool.query(
+      'INSERT INTO boards (id, name) VALUES ($1, $2)',
+      [id, name]
+    );
+    await pool.query(
+      'INSERT INTO board_state (board_id) VALUES ($1)',
+      [id]
+    );
+    res.status(201).json({ id, name });
+  } catch (err) {
+    console.error('Failed to create board:', err.message);
+    res.status(500).json({ error: 'Failed to create board' });
+  }
+});
+
+app.get('/api/boards/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const boardResult = await pool.query(
+      'SELECT id, name FROM boards WHERE id = $1',
+      [id]
+    );
+    if (boardResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Board not found' });
+    }
+    const state = await loadBoardState(id);
+    res.json({
+      id: boardResult.rows[0].id,
+      name: boardResult.rows[0].name,
+      nodes: state.nodes,
+      arrows: state.arrows,
+      strokes: state.strokes,
+    });
+  } catch (err) {
+    console.error('Failed to get board:', err.message);
+    res.status(500).json({ error: 'Failed to get board' });
+  }
+});
+
+// --- HTTP + WebSocket server ---
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = url.parse(request.url).pathname;
+  const match = pathname.match(/^\/ws\/([a-zA-Z0-9_-]+)$/);
+  if (!match) {
+    socket.destroy();
+    return;
+  }
+  request.boardId = match[1];
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
+
+wss.on('connection', async (ws, request) => {
+  const boardId = request.boardId;
+  const userId = generateId();
+  const color = randomColor();
+
+  // Verify board exists (or auto-create)
+  try {
+    const exists = await pool.query('SELECT id FROM boards WHERE id = $1', [boardId]);
+    if (exists.rows.length === 0) {
+      // Auto-create the board so clients can connect to any boardId
+      await pool.query('INSERT INTO boards (id, name) VALUES ($1, $2)', [boardId, 'Untitled']);
+      await pool.query('INSERT INTO board_state (board_id) VALUES ($1)', [boardId]);
+    }
+  } catch (err) {
+    console.error(`Failed to verify/create board ${boardId}:`, err.message);
+    ws.close(1011, 'Database error');
+    return;
+  }
+
+  // Track connection
+  if (!boardClients.has(boardId)) {
+    boardClients.set(boardId, new Set());
+  }
+  boardClients.get(boardId).add(ws);
+  clientInfo.set(ws, { boardId, userId, color });
+
+  console.log(`[${boardId}] User ${userId} connected (${boardClients.get(boardId).size} clients)`);
+
+  // Send initial state
+  try {
+    const state = await loadBoardState(boardId);
+    ws.send(JSON.stringify({
+      type: 'init',
+      state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes },
+    }));
+  } catch (err) {
+    console.error(`Failed to load state for board ${boardId}:`, err.message);
+  }
+
+  // Send current users list to the new client
+  const users = [];
+  for (const client of boardClients.get(boardId)) {
+    const info = clientInfo.get(client);
+    if (info) {
+      users.push({ userId: info.userId, color: info.color });
+    }
+  }
+  ws.send(JSON.stringify({ type: 'users', users }));
+
+  // Announce join to others
+  broadcast(boardId, { type: 'user:join', userId, color }, ws);
+
+  // Handle messages
+  ws.on('message', async (data) => {
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      console.warn(`[${boardId}] Invalid JSON from ${userId}`);
+      return;
+    }
+
+    // Apply delta to in-memory state
+    try {
+      const state = await loadBoardState(boardId);
+      applyDelta(state, msg);
+    } catch (err) {
+      console.error(`[${boardId}] Failed to apply delta:`, err.message);
+    }
+
+    // Broadcast to other clients in the same board
+    broadcast(boardId, msg, ws);
+  });
+
+  // Handle disconnect
+  ws.on('close', () => {
+    const info = clientInfo.get(ws);
+    if (info) {
+      const clients = boardClients.get(info.boardId);
+      if (clients) {
+        clients.delete(ws);
+        if (clients.size === 0) {
+          boardClients.delete(info.boardId);
+          // Flush state to DB before forgetting it
+          saveBoardState(info.boardId).then(() => {
+            boardStates.delete(info.boardId);
+          });
+        }
+      }
+      broadcast(info.boardId, { type: 'user:leave', userId: info.userId });
+      console.log(`[${info.boardId}] User ${info.userId} disconnected (${clients?.size ?? 0} clients)`);
+    }
+    clientInfo.delete(ws);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[${boardId}] WebSocket error for ${userId}:`, err.message);
+  });
+});
+
+// --- Graceful shutdown ---
+async function shutdown() {
+  console.log('Shutting down...');
+
+  clearInterval(saveInterval);
+
+  // Save all dirty boards
+  for (const [boardId, state] of boardStates) {
+    if (state.dirty) {
+      await saveBoardState(boardId);
+    }
+  }
+
+  // Close all WebSocket connections
+  for (const [, clients] of boardClients) {
+    for (const ws of clients) {
+      ws.close(1001, 'Server shutting down');
+    }
+  }
+
+  wss.close();
+
+  server.close(() => {
+    pool.end().then(() => {
+      console.log('Database pool closed');
+      process.exit(0);
+    });
+  });
+
+  // Force exit after 5 seconds
+  setTimeout(() => {
+    console.error('Forced shutdown');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+// --- Start ---
+initDb()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Whiteboard server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database:', err.message);
+    process.exit(1);
+  });
