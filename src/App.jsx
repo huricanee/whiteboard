@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import Canvas from './Canvas.jsx';
+import useSync from './useSync.js';
 
 /* ================================================================
    Constants
@@ -7,6 +8,16 @@ import Canvas from './Canvas.jsx';
 const STORAGE_KEY = 'whiteboard-data';
 const SAVE_DEBOUNCE = 500;
 const MAX_HISTORY = 50;
+const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
+
+// Board ID from URL hash, or generate one
+function getBoardId() {
+  const hash = window.location.hash.slice(1);
+  if (hash && hash.length >= 4) return hash;
+  const id = Math.random().toString(36).slice(2, 10);
+  window.location.hash = id;
+  return id;
+}
 const PALETTE = [
   '#6c8cff', '#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#38d9a9',
   '#4dabf7', '#da77f2', '#f783ac', '#e8590c', '#ffffff', '#868e96',
@@ -111,6 +122,77 @@ export default function App() {
 
   const { nodes, arrows, viewport, strokes = [] } = state;
 
+  // --- Real-time sync ---
+  const boardId = useRef(getBoardId()).current;
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
+  const applyDelta = useCallback((delta) => {
+    setState(prev => {
+      switch (delta.type) {
+        case 'node:add':
+          return { ...prev, nodes: { ...prev.nodes, [delta.node.id]: delta.node } };
+        case 'node:update': {
+          const existing = prev.nodes[delta.id];
+          if (!existing) return prev;
+          return { ...prev, nodes: { ...prev.nodes, [delta.id]: { ...existing, ...delta.updates } } };
+        }
+        case 'node:delete': {
+          const newNodes = { ...prev.nodes };
+          delete newNodes[delta.id];
+          const newArrows = {};
+          for (const [aId, a] of Object.entries(prev.arrows)) {
+            if (a.fromNodeId !== delta.id && a.toNodeId !== delta.id) newArrows[aId] = a;
+          }
+          return { ...prev, nodes: newNodes, arrows: newArrows };
+        }
+        case 'arrow:add':
+          return { ...prev, arrows: { ...prev.arrows, [delta.arrow.id]: delta.arrow } };
+        case 'arrow:delete': {
+          const newArrows = { ...prev.arrows };
+          delete newArrows[delta.id];
+          return { ...prev, arrows: newArrows };
+        }
+        case 'stroke:add':
+          return { ...prev, strokes: [...(prev.strokes || []), delta.stroke] };
+        case 'stroke:delete':
+          return { ...prev, strokes: (prev.strokes || []).filter(s => s.id !== delta.id) };
+        case 'stroke:pixel-erase':
+          return { ...prev, strokes: delta.newStrokes };
+        case 'state:undo':
+          return { ...prev, nodes: delta.state.nodes, arrows: delta.state.arrows, strokes: delta.state.strokes };
+        case 'erase:objects': {
+          const nIds = new Set(delta.nodeIds || []);
+          const aIds = new Set(delta.arrowIds || []);
+          const sIds = new Set(delta.strokeIds || []);
+          const nn = { ...prev.nodes }; for (const id of nIds) delete nn[id];
+          const na = {}; for (const [aId, a] of Object.entries(prev.arrows)) {
+            if (!aIds.has(aId) && !nIds.has(a.fromNodeId) && !nIds.has(a.toNodeId)) na[aId] = a;
+          }
+          const ns = (prev.strokes || []).filter(s => !sIds.has(s.id));
+          return { ...prev, nodes: nn, arrows: na, strokes: ns };
+        }
+        default:
+          return prev;
+      }
+    });
+  }, []);
+
+  const replaceState = useCallback((serverState) => {
+    setState(prev => ({
+      ...prev,
+      nodes: serverState.nodes || {},
+      arrows: serverState.arrows || {},
+      strokes: serverState.strokes || [],
+    }));
+  }, []);
+
+  const { send, users, connected, suppressRef } = useSync(SERVER_URL, boardId, {
+    getState: () => stateRef.current,
+    applyDelta,
+    replaceState,
+  });
+
   /* ================================================================
      Persistence - debounced save to localStorage
      ================================================================ */
@@ -163,12 +245,13 @@ export default function App() {
     historyIndexRef.current -= 1;
     const snap = historyRef.current[historyIndexRef.current];
     setState(prev => applySnapshot(prev, snap));
+    send({ type: 'state:undo', state: snap });
     setHistoryIndex(historyIndexRef.current);
     setSelection({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
     setSelectedId(null);
     setSelectedType(null);
     setTimeout(() => { historyLock.current = false; }, 0);
-  }, []);
+  }, [send]);
 
   const redo = useCallback(() => {
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
@@ -176,12 +259,13 @@ export default function App() {
     historyIndexRef.current += 1;
     const snap = historyRef.current[historyIndexRef.current];
     setState(prev => applySnapshot(prev, snap));
+    send({ type: 'state:undo', state: snap });
     setHistoryIndex(historyIndexRef.current);
     setSelection({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
     setSelectedId(null);
     setSelectedType(null);
     setTimeout(() => { historyLock.current = false; }, 0);
-  }, []);
+  }, [send]);
 
   /* Helper: setState + push history */
   const setStateWithHistory = useCallback((updater) => {
@@ -207,9 +291,10 @@ export default function App() {
       ...prev,
       nodes: { ...prev.nodes, [id]: node },
     }));
+    send({ type: 'node:add', node });
     setSelectedId(id);
     setSelectedType('node');
-  }, [setStateWithHistory]);
+  }, [setStateWithHistory, send]);
 
   const onUpdateNode = useCallback((id, updates) => {
     setState((prev) => {
@@ -220,7 +305,8 @@ export default function App() {
         nodes: { ...prev.nodes, [id]: { ...existing, ...updates } },
       };
     });
-  }, []);
+    send({ type: 'node:update', id, updates });
+  }, [send]);
 
   // Push history after node drag ends (called from Canvas on mouseup)
   const onNodeDragEnd = useCallback(() => {
@@ -234,7 +320,6 @@ export default function App() {
     setStateWithHistory((prev) => {
       const newNodes = { ...prev.nodes };
       delete newNodes[id];
-      // Remove all arrows connected to this node
       const newArrows = {};
       for (const [aId, arrow] of Object.entries(prev.arrows)) {
         if (arrow.fromNodeId !== id && arrow.toNodeId !== id) {
@@ -243,9 +328,10 @@ export default function App() {
       }
       return { ...prev, nodes: newNodes, arrows: newArrows };
     });
+    send({ type: 'node:delete', id });
     setSelectedId(null);
     setSelectedType(null);
-  }, [setStateWithHistory]);
+  }, [setStateWithHistory, send]);
 
   const onAddArrow = useCallback((fromNodeId, fromAnchor, toNodeId, toAnchor) => {
     // Prevent duplicate arrows between same anchors
@@ -261,9 +347,10 @@ export default function App() {
       ...prev,
       arrows: { ...prev.arrows, [id]: arrow },
     }));
+    send({ type: 'arrow:add', arrow });
     setSelectedId(id);
     setSelectedType('arrow');
-  }, [arrows, setStateWithHistory]);
+  }, [arrows, setStateWithHistory, send]);
 
   const onDeleteArrow = useCallback((id) => {
     setStateWithHistory((prev) => {
@@ -271,9 +358,10 @@ export default function App() {
       delete newArrows[id];
       return { ...prev, arrows: newArrows };
     });
+    send({ type: 'arrow:delete', id });
     setSelectedId(null);
     setSelectedType(null);
-  }, [setStateWithHistory]);
+  }, [setStateWithHistory, send]);
 
   const onAddStroke = useCallback((stroke) => {
     const strokeWithId = { ...stroke, id: stroke.id || genId('s') };
@@ -281,7 +369,8 @@ export default function App() {
       ...prev,
       strokes: [...(prev.strokes || []), strokeWithId],
     }));
-  }, [setStateWithHistory]);
+    send({ type: 'stroke:add', stroke: strokeWithId });
+  }, [setStateWithHistory, send]);
 
   const onSelect = useCallback((id, type) => {
     setSelectedId(id);
@@ -292,8 +381,8 @@ export default function App() {
      Eraser callbacks
      ================================================================ */
   const onEraseObjects = useCallback((objectIds) => {
-    // objectIds: { nodeIds: string[], arrowIds: string[], strokeIds: string[] }
     if (!objectIds.nodeIds.length && !objectIds.arrowIds.length && !objectIds.strokeIds.length) return;
+    send({ type: 'erase:objects', nodeIds: objectIds.nodeIds, arrowIds: objectIds.arrowIds, strokeIds: objectIds.strokeIds });
     setStateWithHistory((prev) => {
       const nodeIdSet = new Set(objectIds.nodeIds);
       const arrowIdSet = new Set(objectIds.arrowIds);
@@ -316,15 +405,15 @@ export default function App() {
 
       return { ...prev, nodes: newNodes, arrows: newArrows, strokes: newStrokes };
     });
-  }, [setStateWithHistory]);
+  }, [setStateWithHistory, send]);
 
   const onPixelErase = useCallback((newStrokes) => {
-    // Replace all strokes with new array (after pixel erase splitting)
     setStateWithHistory((prev) => ({
       ...prev,
       strokes: newStrokes,
     }));
-  }, [setStateWithHistory]);
+    send({ type: 'stroke:pixel-erase', newStrokes });
+  }, [setStateWithHistory, send]);
 
   /* ================================================================
      Rectangle selection callbacks

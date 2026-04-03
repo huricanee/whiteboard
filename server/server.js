@@ -196,6 +196,19 @@ function applyDelta(state, msg) {
       state.dirty = true;
       break;
 
+    case 'erase:objects': {
+      const nIds = new Set(msg.nodeIds || []);
+      const aIds = new Set(msg.arrowIds || []);
+      const sIds = new Set(msg.strokeIds || []);
+      for (const id of nIds) delete state.nodes[id];
+      for (const [aId, a] of Object.entries(state.arrows)) {
+        if (aIds.has(aId) || nIds.has(a.fromNodeId) || nIds.has(a.toNodeId)) delete state.arrows[aId];
+      }
+      state.strokes = state.strokes.filter(s => !sIds.has(s.id));
+      state.dirty = true;
+      break;
+    }
+
     case 'state:undo':
       if (msg.state) {
         state.nodes = msg.state.nodes || {};
