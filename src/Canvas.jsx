@@ -1368,11 +1368,13 @@ export default function Canvas({
   const onTextBlur = useCallback((e, nodeId) => {
     const text = e.target.innerText.trim();
     onUpdateNode(nodeId, { text });
+    // Push history after text edit (onUpdateNode doesn't push history)
+    if (onNodeDragEnd) onNodeDragEnd();
     if (editingRef.current === nodeId) {
       setEditingNodeId(null);
       editingRef.current = null;
     }
-  }, [onUpdateNode]);
+  }, [onUpdateNode, onNodeDragEnd]);
 
   const onTextKeyDown = useCallback((e, nodeId) => {
     if (e.key === 'Enter' && !e.shiftKey) {
