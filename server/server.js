@@ -13,14 +13,21 @@ const PORT = process.env.PORT || 3000;
 const DB_SAVE_INTERVAL_MS = 2000;
 
 // --- Database ---
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('railway')
-    ? { rejectUnauthorized: false }
-    : undefined,
-});
+const dbUrl = process.env.DATABASE_URL;
+const pool = dbUrl
+  ? new Pool({
+      connectionString: dbUrl,
+      ssl: { rejectUnauthorized: false },
+    })
+  : null;
+
+let dbReady = false;
 
 async function initDb() {
+  if (!pool) {
+    console.warn('DATABASE_URL not set, running without persistence');
+    return;
+  }
   const client = await pool.connect();
   try {
     await client.query(`
@@ -40,6 +47,7 @@ async function initDb() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    dbReady = true;
     console.log('Database tables initialized');
   } finally {
     client.release();
@@ -72,21 +80,25 @@ async function loadBoardState(boardId) {
   if (boardStates.has(boardId)) {
     return boardStates.get(boardId);
   }
-  const result = await pool.query(
-    'SELECT nodes, arrows, strokes FROM board_state WHERE board_id = $1',
-    [boardId]
-  );
-  let state;
-  if (result.rows.length > 0) {
-    const row = result.rows[0];
-    state = {
-      nodes: row.nodes || {},
-      arrows: row.arrows || {},
-      strokes: row.strokes || [],
-      dirty: false,
-    };
-  } else {
-    state = { nodes: {}, arrows: {}, strokes: [], dirty: false };
+  let state = { nodes: {}, arrows: {}, strokes: [], dirty: false };
+  if (pool && dbReady) {
+    try {
+      const result = await pool.query(
+        'SELECT nodes, arrows, strokes FROM board_state WHERE board_id = $1',
+        [boardId]
+      );
+      if (result.rows.length > 0) {
+        const row = result.rows[0];
+        state = {
+          nodes: row.nodes || {},
+          arrows: row.arrows || {},
+          strokes: row.strokes || [],
+          dirty: false,
+        };
+      }
+    } catch (err) {
+      console.error(`Failed to load board ${boardId}:`, err.message);
+    }
   }
   boardStates.set(boardId, state);
   return state;
@@ -94,7 +106,7 @@ async function loadBoardState(boardId) {
 
 async function saveBoardState(boardId) {
   const state = boardStates.get(boardId);
-  if (!state || !state.dirty) return;
+  if (!state || !state.dirty || !pool || !dbReady) return;
 
   try {
     await pool.query(
@@ -314,17 +326,16 @@ wss.on('connection', async (ws, request) => {
   const color = randomColor();
 
   // Verify board exists (or auto-create)
-  try {
-    const exists = await pool.query('SELECT id FROM boards WHERE id = $1', [boardId]);
-    if (exists.rows.length === 0) {
-      // Auto-create the board so clients can connect to any boardId
-      await pool.query('INSERT INTO boards (id, name) VALUES ($1, $2)', [boardId, 'Untitled']);
-      await pool.query('INSERT INTO board_state (board_id) VALUES ($1)', [boardId]);
+  if (pool && dbReady) {
+    try {
+      const exists = await pool.query('SELECT id FROM boards WHERE id = $1', [boardId]);
+      if (exists.rows.length === 0) {
+        await pool.query('INSERT INTO boards (id, name) VALUES ($1, $2)', [boardId, 'Untitled']);
+        await pool.query('INSERT INTO board_state (board_id) VALUES ($1)', [boardId]);
+      }
+    } catch (err) {
+      console.error(`Board verify/create failed (continuing without DB):`, err.message);
     }
-  } catch (err) {
-    console.error(`Failed to verify/create board ${boardId}:`, err.message);
-    ws.close(1011, 'Database error');
-    return;
   }
 
   // Track connection
@@ -455,6 +466,9 @@ initDb()
     });
   })
   .catch((err) => {
-    console.error('Failed to initialize database:', err.message);
-    process.exit(1);
+    console.error('Database init failed (will start without persistence):', err.message);
+    // Start anyway — boards work in-memory
+    server.listen(PORT, () => {
+      console.log(`Whiteboard server running on port ${PORT} (no DB)`);
+    });
   });
