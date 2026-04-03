@@ -82,6 +82,38 @@
 }
 
 /* ============================================================
+   Arrow labels
+   ============================================================ */
+.arrow-label {
+  display: inline-block;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  min-width: 20px;
+  cursor: default;
+  user-select: none;
+  pointer-events: all;
+}
+
+.arrow-label.editing {
+  outline: 1px solid var(--accent);
+  cursor: text;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.arrow-label:empty:not(.editing) {
+  display: none;
+}
+
+/* ============================================================
    Nodes
    ============================================================ */
 .node-layer {

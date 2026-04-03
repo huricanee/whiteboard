@@ -170,6 +170,11 @@ export default function App() {
         }
         case 'arrow:add':
           return { ...prev, arrows: { ...prev.arrows, [delta.arrow.id]: delta.arrow } };
+        case 'arrow:update': {
+          const ea = prev.arrows[delta.id];
+          if (!ea) return prev;
+          return { ...prev, arrows: { ...prev.arrows, [delta.id]: { ...ea, ...delta.updates } } };
+        }
         case 'arrow:delete': {
           const newArrows = { ...prev.arrows };
           delete newArrows[delta.id];
@@ -373,6 +378,15 @@ export default function App() {
     setSelectedId(id);
     setSelectedType('arrow');
   }, [arrows, setStateWithHistory, send]);
+
+  const onUpdateArrow = useCallback((id, updates) => {
+    setStateWithHistory((prev) => {
+      const existing = prev.arrows[id];
+      if (!existing) return prev;
+      return { ...prev, arrows: { ...prev.arrows, [id]: { ...existing, ...updates } } };
+    });
+    send({ type: 'arrow:update', id, updates });
+  }, [setStateWithHistory, send]);
 
   const onDeleteArrow = useCallback((id) => {
     setStateWithHistory((prev) => {
@@ -878,6 +892,7 @@ export default function App() {
         onSelectionDragEnd={onSelectionDragEnd}
         onNodeDragEnd={onNodeDragEnd}
         isMobile={isMobile}
+        onUpdateArrow={onUpdateArrow}
       />
     </>
   );

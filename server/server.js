@@ -286,6 +286,13 @@ function applyDelta(state, msg) {
       }
       break;
 
+    case 'arrow:update':
+      if (msg.id && state.arrows[msg.id]) {
+        Object.assign(state.arrows[msg.id], msg.updates);
+        state.dirty = true;
+      }
+      break;
+
     case 'arrow:delete':
       if (msg.id && state.arrows[msg.id]) {
         delete state.arrows[msg.id];
@@ -530,6 +537,7 @@ app.get('/api/boards/:id/graph', async (req, res) => {
     const edges = Object.values(state.arrows).map(a => ({
       from: state.nodes[a.fromNodeId]?.text || a.fromNodeId,
       to: state.nodes[a.toNodeId]?.text || a.toNodeId,
+      ...(a.label ? { label: a.label } : {}),
     }));
     res.json({ nodes, edges, nodeCount: nodes.length, edgeCount: edges.length });
   } catch (err) {

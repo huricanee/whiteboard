@@ -47,7 +47,11 @@ function bezierPath(sx, sy, fromAnchor, ex, ey, toAnchor) {
     case 'bottom': cp2y = ey + tension; break;
   }
 
-  return { path: `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`, cp2x, cp2y };
+  // Midpoint of cubic bezier at t=0.5
+  const midX = 0.125 * sx + 0.375 * cp1x + 0.375 * cp2x + 0.125 * ex;
+  const midY = 0.125 * sy + 0.375 * cp1y + 0.375 * cp2y + 0.125 * ey;
+
+  return { path: `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`, cp2x, cp2y, midX, midY };
 }
 
 /* ================================================================
@@ -303,6 +307,7 @@ export default function Canvas({
   onSelectionDragEnd,
   onNodeDragEnd,
   isMobile,
+  onUpdateArrow,
 }) {
   const rootRef = useRef(null);
   const transformRef = useRef(null);
@@ -1353,6 +1358,33 @@ export default function Canvas({
   }, [onSelect]);
 
   /* ================================================================
+     Double-click on arrow -> edit label
+     ================================================================ */
+  const [editingArrowId, setEditingArrowId] = useState(null);
+
+  const onArrowDoubleClick = useCallback((e, arrowId) => {
+    e.stopPropagation();
+    onSelect(arrowId, 'arrow');
+    setEditingArrowId(arrowId);
+  }, [onSelect]);
+
+  const onArrowLabelBlur = useCallback((e, arrowId) => {
+    const label = e.target.innerText.trim();
+    if (onUpdateArrow) onUpdateArrow(arrowId, { label });
+    setEditingArrowId(null);
+  }, [onUpdateArrow]);
+
+  const onArrowLabelKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      e.target.blur();
+    } else if (e.key === 'Escape') {
+      setEditingArrowId(null);
+      e.target.blur();
+    }
+  }, []);
+
+  /* ================================================================
      Node text editing
      ================================================================ */
   const editingRef = useRef(null);
@@ -1475,10 +1507,12 @@ export default function Canvas({
 
     const from = getAnchorPos(fromNode, arrow.fromAnchor, nodeHeightMap);
     const to = getAnchorPos(toNode, arrow.toAnchor, nodeHeightMap);
-    const { path, cp2x, cp2y } = bezierPath(from.x, from.y, arrow.fromAnchor, to.x, to.y, arrow.toAnchor);
+    const { path, cp2x, cp2y, midX, midY } = bezierPath(from.x, from.y, arrow.fromAnchor, to.x, to.y, arrow.toAnchor);
     const color = arrow.color || '#6c8cff';
     const isSelected = selectedType === 'arrow' && selectedId === aId;
     const isInSelection = selection.arrowIds.has(aId);
+    const isEditingLabel = editingArrowId === aId;
+    const hasLabel = arrow.label && arrow.label.trim();
 
     arrowElements.push(
       <g key={aId} style={{ color }}>
@@ -1486,12 +1520,14 @@ export default function Canvas({
           d={path}
           className="arrow-path-hit"
           onClick={(e) => onArrowClick(e, aId)}
+          onDoubleClick={(e) => onArrowDoubleClick(e, aId)}
         />
         <path
           d={path}
           className={`arrow-path${isSelected || isInSelection ? ' selected' : ''}`}
           stroke={color}
           onClick={(e) => onArrowClick(e, aId)}
+          onDoubleClick={(e) => onArrowDoubleClick(e, aId)}
         />
         <polygon
           points={arrowheadPoints(to.x, to.y, cp2x, cp2y, 10)}
@@ -1499,6 +1535,27 @@ export default function Canvas({
           style={{ color }}
           fill={color}
         />
+        {/* Arrow label */}
+        {(hasLabel || isEditingLabel) && (
+          <foreignObject
+            x={midX - 60} y={midY - 14}
+            width={120} height={28}
+            style={{ overflow: 'visible' }}
+          >
+            <div
+              className={`arrow-label${isEditingLabel ? ' editing' : ''}`}
+              contentEditable={isEditingLabel}
+              suppressContentEditableWarning
+              onBlur={(e) => onArrowLabelBlur(e, aId)}
+              onKeyDown={onArrowLabelKeyDown}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => { e.stopPropagation(); onArrowDoubleClick(e, aId); }}
+              ref={(el) => { if (el && isEditingLabel) { el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } }}
+            >
+              {arrow.label || ''}
+            </div>
+          </foreignObject>
+        )}
       </g>
     );
   }
