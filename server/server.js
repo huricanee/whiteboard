@@ -13,7 +13,18 @@ const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '8354275871:AAEfOWq8BK_MbVrFjFqspewji3d9tmxNp24';
 const ALLOWED_USERS = new Set([
   'huricane1',
-  // Add more usernames here
+  'Integral_girl',
+  'ttrhach',
+  'karbonari',
+  'Divan0911',
+  'szbuc',
+  'grixylaa',
+  'faccc1less',
+  'Stlr21Bm',
+  'Kxmaruthebest',
+  'meyiapir',
+  't3hge',
+  'masofita',
 ]);
 
 // --- Telegram auth validation ---
