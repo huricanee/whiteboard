@@ -1,0 +1,451 @@
+/* ============================================================
+   Canvas wrapper - fills the viewport, clips overflow
+   ============================================================ */
+.canvas-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: grab;
+  /* Nebula ambient gradient behind everything */
+  background:
+    radial-gradient(ellipse 60% 50% at 30% 40%, rgba(108, 140, 255, 0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 60% at 70% 60%, rgba(218, 119, 242, 0.03) 0%, transparent 70%),
+    var(--bg);
+}
+
+.canvas-root.panning {
+  cursor: grabbing;
+}
+
+/* Dot grid - rendered as a CSS background on the root */
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 0.2s ease;
+}
+
+/* ============================================================
+   Transform layer - holds nodes + SVG arrows
+   ============================================================ */
+.canvas-transform {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* ============================================================
+   SVG arrow layer
+   ============================================================ */
+.arrow-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.arrow-path {
+  fill: none;
+  stroke-width: 2;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.arrow-path-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.arrow-path.selected {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
+.arrow-path.preview {
+  stroke-dasharray: 8 6;
+  opacity: 0.6;
+}
+
+.arrow-marker {
+  fill: currentColor;
+}
+
+/* ============================================================
+   Nodes
+   ============================================================ */
+.node-layer {
+  position: relative;
+  z-index: 2;
+}
+
+.wb-node {
+  position: absolute;
+  min-height: 60px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 16px;
+  transition: box-shadow 0.2s ease, border-color 0.15s ease;
+  z-index: 2;
+}
+
+.wb-node:hover {
+  z-index: 3;
+}
+
+.wb-node.selected {
+  z-index: 4;
+}
+
+.wb-node.dragging {
+  cursor: grabbing;
+  z-index: 5;
+  transition: none;
+}
+
+.wb-node.in-selection {
+  z-index: 4;
+  outline: 2px solid rgba(108, 140, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.wb-node .node-text {
+  width: 100%;
+  text-align: center;
+  outline: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-height: 1.5em;
+  cursor: text;
+}
+
+.wb-node .node-text[contenteditable="false"] {
+  cursor: grab;
+}
+
+.wb-node .node-text::selection {
+  background: rgba(108, 140, 255, 0.35);
+}
+
+.wb-node .node-text:empty::before {
+  content: "Type here...";
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* ============================================================
+   Anchor dots
+   ============================================================ */
+.anchor-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  cursor: crosshair;
+  z-index: 10;
+  pointer-events: all;
+}
+
+.wb-node:hover .anchor-dot,
+.wb-node.selected .anchor-dot {
+  opacity: 1;
+}
+
+.anchor-dot:hover {
+  transform: scale(1.4);
+}
+
+.anchor-dot.top    { top: -5px;   left: 50%;  transform: translateX(-50%); }
+.anchor-dot.right  { right: -5px; top: 50%;   transform: translateY(-50%); }
+.anchor-dot.bottom { bottom: -5px;left: 50%;  transform: translateX(-50%); }
+.anchor-dot.left   { left: -5px;  top: 50%;   transform: translateY(-50%); }
+
+.wb-node:hover .anchor-dot.top:hover,
+.wb-node.selected .anchor-dot.top:hover    { transform: translateX(-50%) scale(1.4); }
+.wb-node:hover .anchor-dot.right:hover,
+.wb-node.selected .anchor-dot.right:hover  { transform: translateY(-50%) scale(1.4); }
+.wb-node:hover .anchor-dot.bottom:hover,
+.wb-node.selected .anchor-dot.bottom:hover { transform: translateX(-50%) scale(1.4); }
+.wb-node:hover .anchor-dot.left:hover,
+.wb-node.selected .anchor-dot.left:hover   { transform: translateY(-50%) scale(1.4); }
+
+/* ============================================================
+   Toolbar
+   ============================================================ */
+.toolbar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--toolbar-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.toolbar-btn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Active tool button state (unified for select/draw/eraser)
+   ============================================================ */
+.toolbar-btn.tool-active {
+  background: rgba(108, 140, 255, 0.2);
+  color: #6c8cff;
+  border: 1px solid rgba(108, 140, 255, 0.4);
+}
+
+/* ============================================================
+   Eraser options
+   ============================================================ */
+.eraser-options {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.eraser-mode-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  border: none;
+  background: none;
+}
+
+.eraser-mode-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.eraser-mode-btn.active {
+  background: rgba(108, 140, 255, 0.2);
+  color: #6c8cff;
+}
+
+.eraser-radius-slider {
+  width: 60px;
+  height: 4px;
+  accent-color: #6c8cff;
+  cursor: pointer;
+}
+
+/* ============================================================
+   Color palette
+   ============================================================ */
+.color-palette {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+  flex-shrink: 0;
+}
+
+.color-swatch:hover {
+  transform: scale(1.25);
+}
+
+.color-swatch.active {
+  border-color: #fff;
+  transform: scale(1.2);
+}
+
+/* ============================================================
+   Overview mode - zoom < 0.4: hide text, thicken strokes
+   ============================================================ */
+.canvas-root.overview .canvas-grid {
+  opacity: 0;
+}
+
+.canvas-root.overview .node-text {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.canvas-root.overview .anchor-dot {
+  display: none;
+}
+
+.canvas-root.overview .wb-node {
+  border-width: 3px;
+}
+
+.canvas-root.overview .arrow-path {
+  stroke-width: 4;
+}
+
+.canvas-root.overview .arrow-marker {
+  transform: scale(1.6);
+}
+
+/* ============================================================
+   Freehand drawing layer (SVG strokes)
+   ============================================================ */
+.drawing-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.drawing-layer.active {
+  pointer-events: all;
+  cursor: crosshair;
+  z-index: 100;
+}
+
+.freehand-stroke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.freehand-stroke.in-selection {
+  filter: drop-shadow(0 0 3px rgba(108, 140, 255, 0.6));
+}
+
+/* Draw mode indicator */
+.canvas-root.draw-mode {
+  cursor: crosshair;
+}
+
+/* ============================================================
+   Eraser mode
+   ============================================================ */
+.canvas-root.eraser-mode {
+  cursor: none;
+}
+
+.eraser-hit-layer {
+  position: absolute;
+  top: -100000px;
+  left: -100000px;
+  width: 200000px;
+  height: 200000px;
+  z-index: 200;
+  pointer-events: all;
+  cursor: none;
+}
+
+.eraser-cursor-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 300;
+}
+
+.eraser-cursor {
+  fill: rgba(255, 255, 255, 0.05);
+  stroke: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+
+/* ============================================================
+   Rectangle selection
+   ============================================================ */
+.select-hit-layer {
+  position: absolute;
+  top: -100000px;
+  left: -100000px;
+  width: 200000px;
+  height: 200000px;
+  z-index: 0;
+  pointer-events: all;
+  cursor: crosshair;
+}
+
+.select-rect-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 250;
+}
+
+.selection-rect {
+  fill: rgba(108, 140, 255, 0.08);
+  stroke: #6c8cff;
+}

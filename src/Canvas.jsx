@@ -1,0 +1,1209 @@
+import { useState, useRef, useCallback, useEffect } from 'react';
+import './canvas.css';
+
+const GRID_SIZE = 20;
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 2.0;
+const ZOOM_IN_FACTOR = 1.08;
+const ZOOM_OUT_FACTOR = 0.92;
+
+const ANCHORS = ['top', 'right', 'bottom', 'left'];
+
+/* ================================================================
+   Utility: get anchor world position for a node
+   ================================================================ */
+function getAnchorPos(node, anchor, heightMap) {
+  const w = node.width || 220;
+  const h = (heightMap && heightMap[node.id]) || 60;
+  switch (anchor) {
+    case 'top':    return { x: node.x + w / 2, y: node.y };
+    case 'right':  return { x: node.x + w,     y: node.y + h / 2 };
+    case 'bottom': return { x: node.x + w / 2, y: node.y + h };
+    case 'left':   return { x: node.x,         y: node.y + h / 2 };
+    default:       return { x: node.x + w / 2, y: node.y + h / 2 };
+  }
+}
+
+/* ================================================================
+   Utility: cubic bezier path between two anchor endpoints
+   ================================================================ */
+function bezierPath(sx, sy, fromAnchor, ex, ey, toAnchor) {
+  const dist = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
+  const tension = Math.max(dist * 0.4, 40);
+
+  let cp1x = sx, cp1y = sy;
+  switch (fromAnchor) {
+    case 'right':  cp1x = sx + tension; break;
+    case 'left':   cp1x = sx - tension; break;
+    case 'top':    cp1y = sy - tension; break;
+    case 'bottom': cp1y = sy + tension; break;
+  }
+
+  let cp2x = ex, cp2y = ey;
+  switch (toAnchor) {
+    case 'right':  cp2x = ex + tension; break;
+    case 'left':   cp2x = ex - tension; break;
+    case 'top':    cp2y = ey - tension; break;
+    case 'bottom': cp2y = ey + tension; break;
+  }
+
+  return { path: `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`, cp2x, cp2y };
+}
+
+/* ================================================================
+   Utility: arrowhead points at end of curve
+   ================================================================ */
+function arrowheadPoints(ex, ey, cp2x, cp2y, size = 10) {
+  const dx = ex - cp2x;
+  const dy = ey - cp2y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const px = -uy;
+  const py = ux;
+  const x1 = ex - ux * size + px * size * 0.4;
+  const y1 = ey - uy * size + py * size * 0.4;
+  const x2 = ex - ux * size - px * size * 0.4;
+  const y2 = ey - uy * size - py * size * 0.4;
+  return `${ex},${ey} ${x1},${y1} ${x2},${y2}`;
+}
+
+/* ================================================================
+   Utility: closest anchor on a node to a world point
+   ================================================================ */
+function closestAnchor(node, wx, wy, heightMap) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const a of ANCHORS) {
+    const p = getAnchorPos(node, a, heightMap);
+    const d = (p.x - wx) ** 2 + (p.y - wy) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = a;
+    }
+  }
+  return { anchor: best, dist: Math.sqrt(bestDist) };
+}
+
+/* ================================================================
+   Utility: snap to grid
+   ================================================================ */
+function snap(v) {
+  return Math.round(v / GRID_SIZE) * GRID_SIZE;
+}
+
+/* ================================================================
+   Utility: convert freehand points to smoothed SVG path
+   ================================================================ */
+function pointsToPath(points) {
+  if (!points || points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    const mx = (prev.x + cur.x) / 2;
+    const my = (prev.y + cur.y) / 2;
+    d += ` Q ${prev.x} ${prev.y}, ${mx} ${my}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last.x} ${last.y}`;
+  return d;
+}
+
+/* ================================================================
+   Utility: distance from point to line segment
+   ================================================================ */
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = ax + t * dx;
+  const projY = ay + t * dy;
+  return Math.sqrt((px - projX) ** 2 + (py - projY) ** 2);
+}
+
+/* ================================================================
+   Utility: check if point is within radius of any stroke point/segment
+   ================================================================ */
+function strokeHitsCircle(stroke, cx, cy, radius) {
+  if (!stroke.points || stroke.points.length === 0) return false;
+  for (let i = 0; i < stroke.points.length; i++) {
+    const p = stroke.points[i];
+    const dist = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
+    if (dist <= radius) return true;
+    if (i > 0) {
+      const prev = stroke.points[i - 1];
+      if (distToSegment(cx, cy, prev.x, prev.y, p.x, p.y) <= radius) return true;
+    }
+  }
+  return false;
+}
+
+/* ================================================================
+   Utility: check if eraser circle overlaps a node rect
+   ================================================================ */
+function nodeHitsCircle(node, cx, cy, radius, heightMap) {
+  const w = node.width || 220;
+  const h = (heightMap && heightMap[node.id]) || 60;
+  // Closest point on rect to circle center
+  const closestX = Math.max(node.x, Math.min(cx, node.x + w));
+  const closestY = Math.max(node.y, Math.min(cy, node.y + h));
+  const dist = Math.sqrt((cx - closestX) ** 2 + (cy - closestY) ** 2);
+  return dist <= radius;
+}
+
+/* ================================================================
+   Utility: check if arrow (bezier) hits eraser circle
+   ================================================================ */
+function arrowHitsCircle(arrow, nodes, cx, cy, radius, heightMap) {
+  const fromNode = nodes[arrow.fromNodeId];
+  const toNode = nodes[arrow.toNodeId];
+  if (!fromNode || !toNode) return false;
+  const from = getAnchorPos(fromNode, arrow.fromAnchor, heightMap);
+  const to = getAnchorPos(toNode, arrow.toAnchor, heightMap);
+  // Sample the bezier at intervals and check distance
+  const steps = 20;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    // Simple linear approximation for hit testing
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+    if (Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) <= radius) return true;
+  }
+  return false;
+}
+
+/* ================================================================
+   Utility: pixel erase - split strokes around erased points
+   ================================================================ */
+function pixelEraseStrokes(strokes, cx, cy, radius) {
+  let changed = false;
+  const result = [];
+  let idCounter = Date.now();
+
+  for (const stroke of strokes) {
+    if (!stroke.points || stroke.points.length === 0) {
+      result.push(stroke);
+      continue;
+    }
+
+    // Check if any point is within eraser radius
+    let hasHit = false;
+    for (const p of stroke.points) {
+      if (Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2) <= radius) {
+        hasHit = true;
+        break;
+      }
+    }
+
+    if (!hasHit) {
+      result.push(stroke);
+      continue;
+    }
+
+    changed = true;
+    // Split points into contiguous groups outside the eraser
+    const groups = [];
+    let currentGroup = [];
+    for (const p of stroke.points) {
+      const dist = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
+      if (dist > radius) {
+        currentGroup.push(p);
+      } else {
+        if (currentGroup.length > 1) {
+          groups.push(currentGroup);
+        }
+        currentGroup = [];
+      }
+    }
+    if (currentGroup.length > 1) {
+      groups.push(currentGroup);
+    }
+
+    // Create new strokes from groups
+    for (const group of groups) {
+      result.push({
+        id: 's_pe_' + (idCounter++),
+        points: group,
+        color: stroke.color,
+        width: stroke.width,
+      });
+    }
+  }
+
+  return { strokes: result, changed };
+}
+
+/* ================================================================
+   Utility: check if rect overlaps another rect
+   ================================================================ */
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+/* ================================================================
+   CANVAS COMPONENT
+   ================================================================ */
+export default function Canvas({
+  nodes,
+  arrows,
+  viewport,
+  selectedId,
+  selectedType,
+  onUpdateViewport,
+  onAddNode,
+  onUpdateNode,
+  onAddArrow,
+  onSelect,
+  toolMode,
+  drawColor,
+  drawStrokes,
+  onAddStroke,
+  eraserMode,
+  eraserRadius,
+  onEraseObjects,
+  onPixelErase,
+  selection,
+  onSelectionChange,
+  onMoveSelection,
+  onSelectionDragEnd,
+  onNodeDragEnd,
+}) {
+  const rootRef = useRef(null);
+  const transformRef = useRef(null);
+
+  /* ---- internal refs for drag state (not React state to avoid re-renders) ---- */
+  const dragState = useRef(null);      // { type: 'pan' | 'node' | 'arrow' | 'draw' | 'erase' | 'rectSelect' | 'selectionDrag', ... }
+  const panRAF = useRef(null);
+  const vpRef = useRef(viewport);      // always-current viewport for event handlers
+
+  // Sync vpRef via effect instead of during render
+  useEffect(() => {
+    vpRef.current = viewport;
+  }, [viewport]);
+
+  /* ---- node height state for anchor position computation (state, not ref, so render can read it) ---- */
+  const [nodeHeightMap, setNodeHeightMap] = useState({});
+  // We also keep a mutable mirror for use inside event handlers (which run outside render)
+  const nodeHeightRef = useRef({});
+
+  /* ---- Arrow preview state (while dragging from anchor) ---- */
+  const [arrowPreview, setArrowPreview] = useState(null);
+
+  /* ---- Freehand drawing state ---- */
+  const currentStroke = useRef(null); // { points: [{x,y},...], color, width }
+  const [drawingPreview, setDrawingPreview] = useState(null); // SVG path string while drawing
+
+  /* ---- Dragging node id as state for CSS class ---- */
+  const [draggingNodeId, setDraggingNodeId] = useState(null);
+
+  /* ---- Eraser cursor position (world coords) ---- */
+  const [eraserCursor, setEraserCursor] = useState(null);
+
+  /* ---- Rectangle selection visual ---- */
+  const [selectRect, setSelectRect] = useState(null); // { x, y, w, h } in world coords
+
+  /* ================================================================
+     Coordinate conversions
+     ================================================================ */
+  const screenToWorld = useCallback((sx, sy) => {
+    const vp = vpRef.current;
+    return {
+      x: (sx - vp.panX) / vp.zoom,
+      y: (sy - vp.panY) / vp.zoom,
+    };
+  }, []);
+
+  /* ================================================================
+     Zoom (mouse-centric)
+     ================================================================ */
+  const applyZoom = useCallback((factor, cx, cy) => {
+    const vp = vpRef.current;
+    let newZoom = vp.zoom * factor;
+    newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+    const scale = newZoom / vp.zoom;
+    onUpdateViewport({
+      zoom: newZoom,
+      panX: cx - (cx - vp.panX) * scale,
+      panY: cy - (cy - vp.panY) * scale,
+    });
+  }, [onUpdateViewport]);
+
+  /* ================================================================
+     Wheel handler - Ctrl/Meta = zoom, otherwise pan
+     ================================================================ */
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+
+    function onWheel(e) {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const factor = e.deltaY < 0 ? ZOOM_IN_FACTOR : ZOOM_OUT_FACTOR;
+        applyZoom(factor, mx, my);
+      } else {
+        const vp = vpRef.current;
+        onUpdateViewport({
+          ...vp,
+          panX: vp.panX - e.deltaX,
+          panY: vp.panY - e.deltaY,
+        });
+      }
+    }
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [applyZoom, onUpdateViewport]);
+
+  /* ================================================================
+     Touch handling (pan + pinch)
+     ================================================================ */
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+
+    let lastTouches = null;
+
+    function onTouchStart(e) {
+      if (e.touches.length === 1) {
+        lastTouches = [{ x: e.touches[0].clientX, y: e.touches[0].clientY }];
+      } else if (e.touches.length === 2) {
+        e.preventDefault();
+        lastTouches = [
+          { x: e.touches[0].clientX, y: e.touches[0].clientY },
+          { x: e.touches[1].clientX, y: e.touches[1].clientY },
+        ];
+      }
+    }
+
+    function onTouchMove(e) {
+      if (!lastTouches) return;
+      if (e.touches.length === 1 && lastTouches.length === 1) {
+        if (dragState.current) return;
+        const dx = e.touches[0].clientX - lastTouches[0].x;
+        const dy = e.touches[0].clientY - lastTouches[0].y;
+        const vp = vpRef.current;
+        onUpdateViewport({ ...vp, panX: vp.panX + dx, panY: vp.panY + dy });
+        lastTouches = [{ x: e.touches[0].clientX, y: e.touches[0].clientY }];
+      } else if (e.touches.length === 2 && lastTouches.length === 2) {
+        e.preventDefault();
+        const prev = lastTouches;
+        const cur = [
+          { x: e.touches[0].clientX, y: e.touches[0].clientY },
+          { x: e.touches[1].clientX, y: e.touches[1].clientY },
+        ];
+        const prevDist = Math.sqrt((prev[1].x - prev[0].x) ** 2 + (prev[1].y - prev[0].y) ** 2);
+        const curDist = Math.sqrt((cur[1].x - cur[0].x) ** 2 + (cur[1].y - cur[0].y) ** 2);
+        const rect = el.getBoundingClientRect();
+        const cx = (cur[0].x + cur[1].x) / 2 - rect.left;
+        const cy = (cur[0].y + cur[1].y) / 2 - rect.top;
+        const factor = curDist / (prevDist || 1);
+        applyZoom(factor, cx, cy);
+
+        const prevCx = (prev[0].x + prev[1].x) / 2 - rect.left;
+        const prevCy = (prev[0].y + prev[1].y) / 2 - rect.top;
+        const vp = vpRef.current;
+        onUpdateViewport({ ...vp, panX: vp.panX + (cx - prevCx), panY: vp.panY + (cy - prevCy) });
+
+        lastTouches = cur;
+      }
+    }
+
+    function onTouchEnd() {
+      lastTouches = null;
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd);
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [applyZoom, onUpdateViewport]);
+
+  /* ================================================================
+     Mouse down on canvas background -> pan, draw, erase, or rect select
+     ================================================================ */
+  // Keep refs to current tool props for event handlers
+  const toolModeRef = useRef(toolMode);
+  useEffect(() => { toolModeRef.current = toolMode; }, [toolMode]);
+  const eraserModeRef = useRef(eraserMode);
+  useEffect(() => { eraserModeRef.current = eraserMode; }, [eraserMode]);
+  const eraserRadiusRef = useRef(eraserRadius);
+  useEffect(() => { eraserRadiusRef.current = eraserRadius; }, [eraserRadius]);
+  const drawStrokesRef = useRef(drawStrokes);
+  useEffect(() => { drawStrokesRef.current = drawStrokes; }, [drawStrokes]);
+
+  /* ---- Eraser perform ref (set below, used in event handlers) ---- */
+  const performEraseRef = useRef(null);
+
+  const onCanvasMouseDown = useCallback((e) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    const isBackground = e.target === rootRef.current || e.target.classList.contains('canvas-grid') || e.target.classList.contains('canvas-transform') || e.target.classList.contains('drawing-layer') || e.target.classList.contains('eraser-hit-layer') || e.target.classList.contains('select-hit-layer');
+
+    if (!isBackground) return;
+
+    const rect = rootRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const world = screenToWorld(mx, my);
+
+    if (toolMode === 'draw') {
+      // Start freehand drawing
+      e.preventDefault();
+      currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColor || '#6c8cff', width: 2 };
+      dragState.current = { type: 'draw' };
+      setDrawingPreview(pointsToPath([{ x: world.x, y: world.y }]));
+      return;
+    }
+
+    if (toolMode === 'eraser') {
+      e.preventDefault();
+      dragState.current = { type: 'erase' };
+      setEraserCursor(world);
+      // Perform initial erase at click position
+      if (performEraseRef.current) performEraseRef.current(world.x, world.y);
+      return;
+    }
+
+    // Select mode: check if clicking on empty space -> start rect selection or pan
+    if (toolMode === 'select') {
+      // Clear selection and single-select
+      onSelect(null, null);
+      onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
+
+      // Start rectangle selection
+      e.preventDefault();
+      dragState.current = {
+        type: 'rectSelect',
+        startWorld: world,
+        startScreen: { x: mx, y: my },
+        startPanX: vpRef.current.panX,
+        startPanY: vpRef.current.panY,
+        moved: false,
+      };
+      return;
+    }
+  }, [onSelect, toolMode, drawColor, screenToWorld, onSelectionChange]);
+
+  /* ================================================================
+     Eraser perform helper
+     ================================================================ */
+  const performErase = useCallback((wx, wy) => {
+    // Convert screen-pixel radius to world units
+    const radius = eraserRadiusRef.current / vpRef.current.zoom;
+    const mode = eraserModeRef.current;
+
+    if (mode === 'object') {
+      const currentNodes = nodesRef.current;
+      const currentArrows = arrowsRef.current;
+      const currentStrokes = drawStrokesRef.current || [];
+      const hm = nodeHeightRef.current;
+
+      const hitNodeIds = [];
+      const hitArrowIds = [];
+      const hitStrokeIds = [];
+
+      for (const node of Object.values(currentNodes)) {
+        if (nodeHitsCircle(node, wx, wy, radius, hm)) {
+          hitNodeIds.push(node.id);
+        }
+      }
+      for (const [aId, arrow] of Object.entries(currentArrows)) {
+        if (arrowHitsCircle(arrow, currentNodes, wx, wy, radius, hm)) {
+          hitArrowIds.push(aId);
+        }
+      }
+      for (const stroke of currentStrokes) {
+        if (strokeHitsCircle(stroke, wx, wy, radius)) {
+          hitStrokeIds.push(stroke.id);
+        }
+      }
+
+      if (hitNodeIds.length || hitArrowIds.length || hitStrokeIds.length) {
+        onEraseObjects({ nodeIds: hitNodeIds, arrowIds: hitArrowIds, strokeIds: hitStrokeIds });
+      }
+    } else {
+      // Pixel erase
+      const currentStrokes = drawStrokesRef.current || [];
+      const { strokes: newStrokes, changed } = pixelEraseStrokes(currentStrokes, wx, wy, radius);
+      if (changed) {
+        onPixelErase(newStrokes);
+      }
+    }
+  }, [onEraseObjects, onPixelErase]);
+
+  performEraseRef.current = performErase;
+
+  /* ================================================================
+     Mouse down on a node -> start dragging it (or selection drag)
+     ================================================================ */
+  const onNodeMouseDown = useCallback((e, nodeId) => {
+    if (e.button !== 0) return;
+    if (e.target.classList.contains('node-text') && e.target.contentEditable === 'true') return;
+    if (toolMode === 'eraser') return; // Don't drag in eraser mode
+    e.stopPropagation();
+
+    // If this node is part of a multi-selection, start group drag
+    if (selection.nodeIds.has(nodeId) && selection.nodeIds.size > 0) {
+      const rect = rootRef.current.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const world = screenToWorld(mx, my);
+      dragState.current = {
+        type: 'selectionDrag',
+        startWorldX: world.x,
+        startWorldY: world.y,
+        lastWorldX: world.x,
+        lastWorldY: world.y,
+      };
+      return;
+    }
+
+    onSelect(nodeId, 'node');
+    // Clear rect selection when clicking individual node
+    onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
+    const node = nodes[nodeId];
+    if (!node) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const world = screenToWorld(mx, my);
+    dragState.current = {
+      type: 'node',
+      nodeId,
+      offsetX: world.x - node.x,
+      offsetY: world.y - node.y,
+    };
+    setDraggingNodeId(nodeId);
+  }, [nodes, onSelect, screenToWorld, toolMode, selection, onSelectionChange]);
+
+  /* ================================================================
+     Mouse down on an anchor dot -> start arrow creation
+     ================================================================ */
+  const onAnchorMouseDown = useCallback((e, nodeId, anchor) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const rect = rootRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const world = screenToWorld(mx, my);
+    dragState.current = {
+      type: 'arrow',
+      fromNodeId: nodeId,
+      fromAnchor: anchor,
+    };
+    setArrowPreview({
+      fromNodeId: nodeId,
+      fromAnchor: anchor,
+      cursorX: world.x,
+      cursorY: world.y,
+      snapNodeId: null,
+      snapAnchor: null,
+    });
+  }, [screenToWorld]);
+
+  /* ================================================================
+     Global mousemove / mouseup
+     ================================================================ */
+  // We need stable refs to state for use in the mousemove handler
+  const nodesRef = useRef(nodes);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  const arrowsRef = useRef(arrows);
+  useEffect(() => { arrowsRef.current = arrows; }, [arrows]);
+
+  useEffect(() => {
+    function onMouseMove(e) {
+      const ds = dragState.current;
+
+      // Update eraser cursor position even when not dragging
+      if (toolModeRef.current === 'eraser' && rootRef.current) {
+        const rect = rootRef.current.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const vp = vpRef.current;
+        setEraserCursor({
+          x: (mx - vp.panX) / vp.zoom,
+          y: (my - vp.panY) / vp.zoom,
+        });
+      }
+
+      if (!ds) return;
+
+      const rect = rootRef.current.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      if (ds.type === 'draw') {
+        const vp = vpRef.current;
+        const worldX = (mx - vp.panX) / vp.zoom;
+        const worldY = (my - vp.panY) / vp.zoom;
+        if (currentStroke.current) {
+          currentStroke.current.points.push({ x: worldX, y: worldY });
+          setDrawingPreview(pointsToPath(currentStroke.current.points));
+        }
+        return;
+      }
+
+      if (ds.type === 'erase') {
+        const vp = vpRef.current;
+        const worldX = (mx - vp.panX) / vp.zoom;
+        const worldY = (my - vp.panY) / vp.zoom;
+        setEraserCursor({ x: worldX, y: worldY });
+        performEraseRef.current(worldX, worldY);
+        return;
+      }
+
+      if (ds.type === 'rectSelect') {
+        ds.moved = true;
+        const vp = vpRef.current;
+        const currentWorld = {
+          x: (mx - vp.panX) / vp.zoom,
+          y: (my - vp.panY) / vp.zoom,
+        };
+        const startWorld = ds.startWorld;
+        const rx = Math.min(startWorld.x, currentWorld.x);
+        const ry = Math.min(startWorld.y, currentWorld.y);
+        const rw = Math.abs(currentWorld.x - startWorld.x);
+        const rh = Math.abs(currentWorld.y - startWorld.y);
+        setSelectRect({ x: rx, y: ry, w: rw, h: rh });
+
+        // Compute selection
+        const selRect = { x: rx, y: ry, w: rw, h: rh };
+        const currentNodes = nodesRef.current;
+        const currentArrows = arrowsRef.current;
+        const currentStrokes = drawStrokesRef.current || [];
+        const hm = nodeHeightRef.current;
+
+        const selNodeIds = new Set();
+        const selStrokeIds = new Set();
+        const selArrowIds = new Set();
+
+        for (const node of Object.values(currentNodes)) {
+          const nw = node.width || 220;
+          const nh = (hm && hm[node.id]) || 60;
+          const nodeRect = { x: node.x, y: node.y, w: nw, h: nh };
+          if (rectsOverlap(selRect, nodeRect)) {
+            selNodeIds.add(node.id);
+          }
+        }
+
+        for (const stroke of currentStrokes) {
+          if (stroke.points && stroke.points.some(p => p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh)) {
+            selStrokeIds.add(stroke.id);
+          }
+        }
+
+        // Select arrows connected to selected nodes
+        for (const [aId, arrow] of Object.entries(currentArrows)) {
+          if (selNodeIds.has(arrow.fromNodeId) || selNodeIds.has(arrow.toNodeId)) {
+            selArrowIds.add(aId);
+          }
+        }
+
+        onSelectionChange({ nodeIds: selNodeIds, arrowIds: selArrowIds, strokeIds: selStrokeIds });
+        return;
+      }
+
+      if (ds.type === 'selectionDrag') {
+        const vp = vpRef.current;
+        const worldX = (mx - vp.panX) / vp.zoom;
+        const worldY = (my - vp.panY) / vp.zoom;
+        const dx = snap(worldX - ds.lastWorldX);
+        const dy = snap(worldY - ds.lastWorldY);
+        if (dx !== 0 || dy !== 0) {
+          onMoveSelection(dx, dy);
+          ds.lastWorldX += dx;
+          ds.lastWorldY += dy;
+        }
+        return;
+      }
+
+      if (ds.type === 'pan') {
+        if (panRAF.current) cancelAnimationFrame(panRAF.current);
+        panRAF.current = requestAnimationFrame(() => {
+          const dx = mx - ds.startX;
+          const dy = my - ds.startY;
+          onUpdateViewport({
+            ...vpRef.current,
+            panX: ds.startPanX + dx,
+            panY: ds.startPanY + dy,
+          });
+        });
+      } else if (ds.type === 'node') {
+        const vp = vpRef.current;
+        const worldX = (mx - vp.panX) / vp.zoom;
+        const worldY = (my - vp.panY) / vp.zoom;
+        const newX = snap(worldX - ds.offsetX);
+        const newY = snap(worldY - ds.offsetY);
+        onUpdateNode(ds.nodeId, { x: newX, y: newY });
+      } else if (ds.type === 'arrow') {
+        const vp = vpRef.current;
+        const worldX = (mx - vp.panX) / vp.zoom;
+        const worldY = (my - vp.panY) / vp.zoom;
+        const currentNodes = nodesRef.current;
+        const hm = nodeHeightRef.current;
+        let snapNodeId = null;
+        let snapAnchor = null;
+        const SNAP_DIST = 30;
+        for (const nid of Object.keys(currentNodes)) {
+          if (nid === ds.fromNodeId) continue;
+          const { anchor, dist } = closestAnchor(currentNodes[nid], worldX, worldY, hm);
+          if (dist < SNAP_DIST) {
+            snapNodeId = nid;
+            snapAnchor = anchor;
+            break;
+          }
+        }
+        setArrowPreview({
+          fromNodeId: ds.fromNodeId,
+          fromAnchor: ds.fromAnchor,
+          cursorX: worldX,
+          cursorY: worldY,
+          snapNodeId,
+          snapAnchor,
+        });
+      }
+    }
+
+    function onMouseUp() {
+      const ds = dragState.current;
+      if (ds && ds.type === 'draw') {
+        if (currentStroke.current && currentStroke.current.points.length > 1 && onAddStroke) {
+          onAddStroke({ ...currentStroke.current });
+        }
+        currentStroke.current = null;
+        setDrawingPreview(null);
+      }
+      if (ds && ds.type === 'pan') {
+        rootRef.current?.classList.remove('panning');
+      }
+      if (ds && ds.type === 'node') {
+        setDraggingNodeId(null);
+        onNodeDragEnd();
+      }
+      if (ds && ds.type === 'erase') {
+        // Erase done
+      }
+      if (ds && ds.type === 'rectSelect') {
+        setSelectRect(null);
+        // If user didn't move, it was a click on empty space -> already cleared selection
+        if (!ds.moved) {
+          // Start panning instead
+        }
+      }
+      if (ds && ds.type === 'selectionDrag') {
+        onSelectionDragEnd();
+      }
+      if (ds && ds.type === 'arrow') {
+        setArrowPreview((prev) => {
+          if (prev && prev.snapNodeId && prev.snapAnchor) {
+            onAddArrow(prev.fromNodeId, prev.fromAnchor, prev.snapNodeId, prev.snapAnchor);
+          }
+          return null;
+        });
+      }
+      dragState.current = null;
+      if (panRAF.current) {
+        cancelAnimationFrame(panRAF.current);
+        panRAF.current = null;
+      }
+    }
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [onUpdateViewport, onUpdateNode, onAddArrow, onAddStroke, onMoveSelection, onSelectionDragEnd, onNodeDragEnd, onSelectionChange]);
+
+  /* ================================================================
+     Handle mouse leaving canvas - hide eraser cursor
+     ================================================================ */
+  const onCanvasMouseLeave = useCallback(() => {
+    if (toolMode === 'eraser') {
+      setEraserCursor(null);
+    }
+  }, [toolMode]);
+
+  /* ================================================================
+     Double-click on background -> create node
+     ================================================================ */
+  const onCanvasDoubleClick = useCallback((e) => {
+    if (e.target !== rootRef.current && !e.target.classList.contains('canvas-grid') && !e.target.classList.contains('canvas-transform') && !e.target.classList.contains('select-hit-layer')) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const world = screenToWorld(mx, my);
+    onAddNode(snap(world.x - 110), snap(world.y - 30));
+  }, [screenToWorld, onAddNode]);
+
+  /* ================================================================
+     Click on arrow -> select it
+     ================================================================ */
+  const onArrowClick = useCallback((e, arrowId) => {
+    e.stopPropagation();
+    onSelect(arrowId, 'arrow');
+  }, [onSelect]);
+
+  /* ================================================================
+     Node text editing
+     ================================================================ */
+  const editingRef = useRef(null);
+  const [editingNodeId, setEditingNodeId] = useState(null);
+
+  const onTextClick = useCallback((e, nodeId) => {
+    e.stopPropagation();
+    onSelect(nodeId, 'node');
+    setEditingNodeId(nodeId);
+    editingRef.current = nodeId;
+  }, [onSelect]);
+
+  const onTextBlur = useCallback((e, nodeId) => {
+    const text = e.target.innerText.trim();
+    onUpdateNode(nodeId, { text });
+    if (editingRef.current === nodeId) {
+      setEditingNodeId(null);
+      editingRef.current = null;
+    }
+  }, [onUpdateNode]);
+
+  const onTextKeyDown = useCallback((e, nodeId) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      e.target.blur();
+    } else if (e.key === 'Escape') {
+      e.target.innerText = nodes[nodeId]?.text || '';
+      setEditingNodeId(null);
+      editingRef.current = null;
+      e.target.blur();
+    }
+  }, [nodes]);
+
+  /* ================================================================
+     Measure node heights after render
+     ================================================================ */
+  const nodeElsRef = useRef({});
+
+  const registerNodeEl = useCallback((nodeId, el) => {
+    if (el) {
+      nodeElsRef.current[nodeId] = el;
+    } else {
+      delete nodeElsRef.current[nodeId];
+    }
+  }, []);
+
+  const measureAllNodes = useCallback(() => {
+    const newMap = {};
+    let changed = false;
+    const nodeIds = Object.keys(nodesRef.current);
+    for (const id of nodeIds) {
+      const el = nodeElsRef.current[id];
+      if (el) {
+        const natural = el.offsetHeight;
+        const snapped = Math.max(60, Math.ceil(natural / GRID_SIZE) * GRID_SIZE);
+        newMap[id] = snapped;
+        if (nodeHeightRef.current[id] !== snapped) {
+          changed = true;
+        }
+      } else {
+        newMap[id] = nodeHeightRef.current[id] || 60;
+      }
+    }
+    for (const id of Object.keys(nodeHeightRef.current)) {
+      if (!nodesRef.current[id]) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      nodeHeightRef.current = newMap;
+      setNodeHeightMap(newMap);
+    }
+  }, []);
+
+  // Use ResizeObserver to detect node size changes and re-measure
+  const resizeObserverRef = useRef(null);
+
+  useEffect(() => {
+    const ro = new ResizeObserver(() => {
+      measureAllNodes();
+    });
+    resizeObserverRef.current = ro;
+
+    // Observe all currently registered node elements
+    for (const el of Object.values(nodeElsRef.current)) {
+      ro.observe(el);
+    }
+
+    return () => ro.disconnect();
+  }, [measureAllNodes]);
+
+  // Re-observe when nodes change (new nodes added or removed)
+  useEffect(() => {
+    const ro = resizeObserverRef.current;
+    if (!ro) return;
+    // Re-observe all current elements
+    ro.disconnect();
+    for (const el of Object.values(nodeElsRef.current)) {
+      ro.observe(el);
+    }
+    // Trigger measurement via a microtask (not synchronous in effect body)
+    queueMicrotask(() => measureAllNodes());
+  }, [nodes, measureAllNodes]);
+
+  /* ================================================================
+     Render helpers
+     ================================================================ */
+  const { panX, panY, zoom } = viewport;
+  const gridSize = GRID_SIZE * zoom;
+
+  /* ---- Render arrows (SVG) ---- */
+  const arrowElements = [];
+  for (const aId of Object.keys(arrows)) {
+    const arrow = arrows[aId];
+    const fromNode = nodes[arrow.fromNodeId];
+    const toNode = nodes[arrow.toNodeId];
+    if (!fromNode || !toNode) continue;
+
+    const from = getAnchorPos(fromNode, arrow.fromAnchor, nodeHeightMap);
+    const to = getAnchorPos(toNode, arrow.toAnchor, nodeHeightMap);
+    const { path, cp2x, cp2y } = bezierPath(from.x, from.y, arrow.fromAnchor, to.x, to.y, arrow.toAnchor);
+    const color = arrow.color || '#6c8cff';
+    const isSelected = selectedType === 'arrow' && selectedId === aId;
+    const isInSelection = selection.arrowIds.has(aId);
+
+    arrowElements.push(
+      <g key={aId} style={{ color }}>
+        <path
+          d={path}
+          className="arrow-path-hit"
+          onClick={(e) => onArrowClick(e, aId)}
+        />
+        <path
+          d={path}
+          className={`arrow-path${isSelected || isInSelection ? ' selected' : ''}`}
+          stroke={color}
+          onClick={(e) => onArrowClick(e, aId)}
+        />
+        <polygon
+          points={arrowheadPoints(to.x, to.y, cp2x, cp2y, 10)}
+          className="arrow-marker"
+          style={{ color }}
+          fill={color}
+        />
+      </g>
+    );
+  }
+
+  /* ---- Preview arrow while dragging ---- */
+  if (arrowPreview) {
+    const fromNode = nodes[arrowPreview.fromNodeId];
+    if (fromNode) {
+      const from = getAnchorPos(fromNode, arrowPreview.fromAnchor, nodeHeightMap);
+      let ex, ey, toAnchor;
+      if (arrowPreview.snapNodeId && arrowPreview.snapAnchor) {
+        const toNode = nodes[arrowPreview.snapNodeId];
+        if (toNode) {
+          const to = getAnchorPos(toNode, arrowPreview.snapAnchor, nodeHeightMap);
+          ex = to.x;
+          ey = to.y;
+          toAnchor = arrowPreview.snapAnchor;
+        }
+      }
+      if (ex === undefined) {
+        ex = arrowPreview.cursorX;
+        ey = arrowPreview.cursorY;
+        const dx = ex - from.x;
+        const dy = ey - from.y;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          toAnchor = dx > 0 ? 'left' : 'right';
+        } else {
+          toAnchor = dy > 0 ? 'top' : 'bottom';
+        }
+      }
+      const { path, cp2x, cp2y } = bezierPath(from.x, from.y, arrowPreview.fromAnchor, ex, ey, toAnchor);
+      arrowElements.push(
+        <g key="__preview__" style={{ color: '#6c8cff' }}>
+          <path d={path} className="arrow-path preview" stroke="#6c8cff" />
+          <polygon
+            points={arrowheadPoints(ex, ey, cp2x, cp2y, 8)}
+            fill="#6c8cff"
+            opacity={0.6}
+          />
+        </g>
+      );
+    }
+  }
+
+  /* ---- Render nodes ---- */
+  const nodeElements = Object.values(nodes).map((node) => {
+    const isSelected = selectedType === 'node' && selectedId === node.id;
+    const isEditing = editingNodeId === node.id;
+    const isDragging = draggingNodeId === node.id;
+    const isInSelection = selection.nodeIds.has(node.id);
+    const color = node.color || '#6c8cff';
+    const height = nodeHeightMap[node.id] || 60;
+
+    return (
+      <div
+        key={node.id}
+        ref={(el) => registerNodeEl(node.id, el)}
+        className={`wb-node${isSelected ? ' selected' : ''}${isDragging ? ' dragging' : ''}${isInSelection ? ' in-selection' : ''}`}
+        style={{
+          left: node.x,
+          top: node.y,
+          width: node.width || 220,
+          minHeight: height,
+          borderColor: color,
+          boxShadow: `0 0 ${isSelected || isInSelection ? 20 : 12}px ${isSelected || isInSelection ? 4 : 2}px ${color}22, inset 0 0 ${isSelected || isInSelection ? 16 : 8}px ${color}08`,
+        }}
+        onMouseDown={(e) => onNodeMouseDown(e, node.id)}
+      >
+        <span
+          className="node-text"
+          contentEditable={isEditing}
+          suppressContentEditableWarning
+          onClick={(e) => onTextClick(e, node.id)}
+          onBlur={(e) => onTextBlur(e, node.id)}
+          onKeyDown={(e) => onTextKeyDown(e, node.id)}
+          onInput={(e) => {
+            const el = e.target.closest('.wb-node');
+            if (el) {
+              el.style.minHeight = 'auto';
+              const natural = el.offsetHeight;
+              const snapped = Math.max(60, Math.ceil(natural / GRID_SIZE) * GRID_SIZE);
+              el.style.minHeight = snapped + 'px';
+              nodeHeightRef.current[node.id] = snapped;
+              setNodeHeightMap((prev) => ({ ...prev, [node.id]: snapped }));
+            }
+          }}
+        >
+          {node.text}
+        </span>
+
+        {ANCHORS.map((a) => (
+          <div
+            key={a}
+            className={`anchor-dot ${a}`}
+            style={{ background: color }}
+            onMouseDown={(e) => onAnchorMouseDown(e, node.id, a)}
+          />
+        ))}
+      </div>
+    );
+  });
+
+  const isOverview = viewport.zoom < 0.4;
+
+  // Determine cursor class based on tool mode
+  const cursorClass = toolMode === 'draw' ? ' draw-mode'
+    : toolMode === 'eraser' ? ' eraser-mode'
+    : '';
+
+  return (
+    <div
+      ref={rootRef}
+      className={`canvas-root${isOverview ? ' overview' : ''}${cursorClass}`}
+      onMouseDown={onCanvasMouseDown}
+      onDoubleClick={toolMode === 'select' ? onCanvasDoubleClick : undefined}
+      onMouseLeave={onCanvasMouseLeave}
+    >
+      <div
+        className="canvas-grid"
+        style={{
+          backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)`,
+          backgroundSize: `${gridSize}px ${gridSize}px`,
+          backgroundPosition: `${panX % gridSize}px ${panY % gridSize}px`,
+        }}
+      />
+
+      <div
+        ref={transformRef}
+        className="canvas-transform"
+        style={{
+          transform: `translate3d(${panX}px, ${panY}px, 0) scale3d(${zoom}, ${zoom}, 1)`,
+        }}
+      >
+        <svg className="arrow-layer" width="1" height="1">
+          {arrowElements}
+        </svg>
+
+        <div className="node-layer">
+          {nodeElements}
+        </div>
+
+        {/* Freehand drawing layer */}
+        <svg className={`drawing-layer${toolMode === 'draw' ? ' active' : ''}`} width="1" height="1">
+          {/* Persisted strokes */}
+          {drawStrokes && drawStrokes.map((stroke) => (
+            <path
+              key={stroke.id}
+              d={pointsToPath(stroke.points)}
+              className={`freehand-stroke${selection.strokeIds.has(stroke.id) ? ' in-selection' : ''}`}
+              stroke={stroke.color || '#6c8cff'}
+              strokeWidth={stroke.width || 2}
+            />
+          ))}
+          {/* Live preview while drawing */}
+          {drawingPreview && currentStroke.current && (
+            <path
+              d={drawingPreview}
+              className="freehand-stroke"
+              stroke={currentStroke.current.color || '#6c8cff'}
+              strokeWidth={currentStroke.current.width || 2}
+              opacity={0.7}
+            />
+          )}
+        </svg>
+
+        {/* Eraser hit layer - catches mouse events in eraser mode */}
+        {toolMode === 'eraser' && (
+          <div className="eraser-hit-layer" />
+        )}
+
+        {/* Select hit layer - catches mouse events in select mode for rect selection */}
+        {toolMode === 'select' && (
+          <div className="select-hit-layer" />
+        )}
+
+        {/* Rectangle selection visual */}
+        {selectRect && (
+          <svg className="select-rect-layer" width="1" height="1">
+            <rect
+              x={selectRect.x}
+              y={selectRect.y}
+              width={selectRect.w}
+              height={selectRect.h}
+              className="selection-rect"
+              strokeWidth={1 / zoom}
+              strokeDasharray={`${6 / zoom} ${4 / zoom}`}
+            />
+          </svg>
+        )}
+
+        {/* Eraser cursor circle - radius converted to world units */}
+        {toolMode === 'eraser' && eraserCursor && (
+          <svg className="eraser-cursor-layer" width="1" height="1">
+            <circle
+              cx={eraserCursor.x}
+              cy={eraserCursor.y}
+              r={eraserRadius / zoom}
+              className="eraser-cursor"
+              strokeWidth={1.5 / zoom}
+            />
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+}
