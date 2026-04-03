@@ -1,6 +1,20 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import Canvas from './Canvas.jsx';
 import useSync from './useSync.js';
+import useTelegramAuth from './useTelegramAuth.js';
+
+/* ================================================================
+   Mobile detection hook
+   ================================================================ */
+function useMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return isMobile;
+}
 
 /* ================================================================
    Constants
@@ -100,6 +114,9 @@ function applySnapshot(state, snapshot) {
    APP COMPONENT
    ================================================================ */
 export default function App() {
+  const { authorized, loading, error } = useTelegramAuth();
+  const isMobile = useMobile();
+
   const [state, setState] = useState(() => loadState() || defaultState());
   const [selectedId, setSelectedId] = useState(null);
   const [selectedType, setSelectedType] = useState(null); // 'node' | 'arrow' | null
@@ -622,6 +639,17 @@ export default function App() {
   /* ================================================================
      Render
      ================================================================ */
+  if (loading) {
+    return <div className="auth-gate"><p>Loading...</p></div>;
+  }
+  if (!authorized) {
+    return (
+      <div className="auth-gate">
+        <p>{error || 'Open this whiteboard from Telegram'}</p>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Toolbar */}
@@ -790,6 +818,7 @@ export default function App() {
         onMoveSelection={onMoveSelection}
         onSelectionDragEnd={onSelectionDragEnd}
         onNodeDragEnd={onNodeDragEnd}
+        isMobile={isMobile}
       />
     </>
   );

@@ -7,6 +7,8 @@
   height: 100%;
   overflow: hidden;
   cursor: grab;
+  touch-action: none;
+  -webkit-touch-callout: none;
   /* Nebula ambient gradient behind everything */
   background:
     radial-gradient(ellipse 60% 50% at 30% 40%, rgba(108, 140, 255, 0.04) 0%, transparent 70%),
@@ -448,4 +450,70 @@
 .selection-rect {
   fill: rgba(108, 140, 255, 0.08);
   stroke: #6c8cff;
+}
+
+/* ============================================================
+   Auth gate
+   ============================================================ */
+.auth-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--text-muted, rgba(255,255,255,0.5));
+  font-size: 16px;
+  text-align: center;
+  padding: 24px;
+}
+
+/* ============================================================
+   MOBILE — toolbar at bottom, compact buttons
+   ============================================================ */
+@media (max-width: 768px) {
+  .toolbar {
+    top: auto;
+    bottom: 12px;
+    padding: 6px 10px;
+    gap: 4px;
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Hide text labels, keep icons only */
+  .toolbar-btn span,
+  .toolbar-btn:not(:empty) {
+    font-size: 0;
+  }
+  .toolbar-btn svg {
+    font-size: initial;
+  }
+  .toolbar-btn {
+    padding: 8px;
+    min-width: 36px;
+    min-height: 36px;
+    font-size: 0;
+  }
+
+  .color-swatch {
+    width: 14px;
+    height: 14px;
+  }
+
+  .color-palette {
+    gap: 3px;
+  }
+
+  .eraser-mode-btn {
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  .eraser-radius-slider {
+    width: 40px;
+  }
+
+  .toolbar-divider {
+    height: 20px;
+  }
 }

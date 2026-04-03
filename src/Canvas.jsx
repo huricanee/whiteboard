@@ -272,6 +272,7 @@ export default function Canvas({
   onMoveSelection,
   onSelectionDragEnd,
   onNodeDragEnd,
+  isMobile,
 }) {
   const rootRef = useRef(null);
   const transformRef = useRef(null);
@@ -293,6 +294,10 @@ export default function Canvas({
 
   /* ---- Arrow preview state (while dragging from anchor) ---- */
   const [arrowPreview, setArrowPreview] = useState(null);
+
+  /* ---- Refs for mobile touch handler closures ---- */
+  const drawColorRef = useRef(drawColor);
+  useEffect(() => { drawColorRef.current = drawColor; }, [drawColor]);
 
   /* ---- Freehand drawing state ---- */
   const currentStroke = useRef(null); // { points: [{x,y},...], color, width }
@@ -363,9 +368,10 @@ export default function Canvas({
   }, [applyZoom, onUpdateViewport]);
 
   /* ================================================================
-     Touch handling (pan + pinch)
+     Touch handling — DESKTOP (existing, unchanged)
      ================================================================ */
   useEffect(() => {
+    if (isMobile) return; // mobile has its own handler below
     const el = rootRef.current;
     if (!el) return;
 
@@ -428,7 +434,200 @@ export default function Canvas({
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [applyZoom, onUpdateViewport]);
+  }, [isMobile, applyZoom, onUpdateViewport]);
+
+  /* ================================================================
+     Touch handling — MOBILE
+     1 finger: draw/pan/erase (depends on toolMode)
+     2 fingers: ALWAYS pinch zoom + pan (any tool mode)
+     ================================================================ */
+  useEffect(() => {
+    if (!isMobile) return;
+    const el = rootRef.current;
+    if (!el) return;
+
+    let touchState = null;
+
+    const getDist = (t1, t2) => Math.sqrt((t1.clientX - t2.clientX) ** 2 + (t1.clientY - t2.clientY) ** 2);
+    const getMid = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 });
+
+    function onTouchStart(e) {
+      // Don't capture touches on toolbar
+      if (e.target.closest('.toolbar')) return;
+      e.preventDefault();
+
+      if (e.touches.length === 2) {
+        // Always switch to pinch, even if was drawing
+        if (touchState && touchState.type === 'draw' && currentStroke.current) {
+          // Save the partial stroke before switching to pinch
+          if (currentStroke.current.points.length > 1 && onAddStroke) {
+            onAddStroke({ ...currentStroke.current });
+          }
+          currentStroke.current = null;
+          setDrawingPreview(null);
+        }
+        const dist = getDist(e.touches[0], e.touches[1]);
+        const mid = getMid(e.touches[0], e.touches[1]);
+        const vp = vpRef.current;
+        touchState = {
+          type: 'pinch',
+          initialDist: dist,
+          initialZoom: vp.zoom,
+          initialPanX: vp.panX,
+          initialPanY: vp.panY,
+          lastMid: mid,
+        };
+        return;
+      }
+
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const rect = el.getBoundingClientRect();
+        const mx = t.clientX - rect.left;
+        const my = t.clientY - rect.top;
+        const world = screenToWorld(mx, my);
+        const mode = toolModeRef.current;
+
+        // Check if touching a node
+        const currentNodes = nodesRef.current;
+        const hm = nodeHeightRef.current;
+        let hitNodeId = null;
+        for (const nid of Object.keys(currentNodes)) {
+          const n = currentNodes[nid];
+          const w = n.width || 220;
+          const h = hm[nid] || 60;
+          if (world.x >= n.x && world.x <= n.x + w && world.y >= n.y && world.y <= n.y + h) {
+            hitNodeId = nid;
+            break;
+          }
+        }
+
+        if (hitNodeId && mode === 'select') {
+          // Drag node
+          const n = currentNodes[hitNodeId];
+          onSelect(hitNodeId, 'node');
+          touchState = {
+            type: 'node-drag',
+            nodeId: hitNodeId,
+            offsetX: world.x - n.x,
+            offsetY: world.y - n.y,
+          };
+          setDraggingNodeId(hitNodeId);
+          return;
+        }
+
+        if (mode === 'draw') {
+          currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColorRef.current || '#6c8cff', width: 2 };
+          touchState = { type: 'draw' };
+          setDrawingPreview(pointsToPath([{ x: world.x, y: world.y }]));
+          return;
+        }
+
+        // Default: pan
+        touchState = {
+          type: 'pan',
+          lastX: t.clientX,
+          lastY: t.clientY,
+          startX: t.clientX,
+          startY: t.clientY,
+          moved: false,
+        };
+      }
+    }
+
+    function onTouchMove(e) {
+      if (!touchState) return;
+      e.preventDefault();
+
+      if (e.touches.length === 2 && touchState.type === 'pinch') {
+        // Pinch zoom (AVRO pattern)
+        const dist = getDist(e.touches[0], e.touches[1]);
+        const mid = getMid(e.touches[0], e.touches[1]);
+        const scale = dist / touchState.initialDist;
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, touchState.initialZoom * scale));
+        const rect = el.getBoundingClientRect();
+        const mx = mid.x - rect.left;
+        const my = mid.y - rect.top;
+        const zoomRatio = newZoom / touchState.initialZoom;
+        onUpdateViewport({
+          panX: mx - (mx - touchState.initialPanX) * zoomRatio,
+          panY: my - (my - touchState.initialPanY) * zoomRatio,
+          zoom: newZoom,
+        });
+        return;
+      }
+
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const rect = el.getBoundingClientRect();
+        const mx = t.clientX - rect.left;
+        const my = t.clientY - rect.top;
+
+        if (touchState.type === 'draw') {
+          const vp = vpRef.current;
+          const wx = (mx - vp.panX) / vp.zoom;
+          const wy = (my - vp.panY) / vp.zoom;
+          if (currentStroke.current) {
+            currentStroke.current.points.push({ x: wx, y: wy });
+            setDrawingPreview(pointsToPath(currentStroke.current.points));
+          }
+        } else if (touchState.type === 'node-drag') {
+          const vp = vpRef.current;
+          const wx = (mx - vp.panX) / vp.zoom;
+          const wy = (my - vp.panY) / vp.zoom;
+          onUpdateNode(touchState.nodeId, { x: snap(wx - touchState.offsetX), y: snap(wy - touchState.offsetY) });
+        } else if (touchState.type === 'pan') {
+          const dx = t.clientX - touchState.lastX;
+          const dy = t.clientY - touchState.lastY;
+          if (!touchState.moved && Math.abs(t.clientX - touchState.startX) < 4 && Math.abs(t.clientY - touchState.startY) < 4) return;
+          touchState.moved = true;
+          touchState.lastX = t.clientX;
+          touchState.lastY = t.clientY;
+          const vp = vpRef.current;
+          onUpdateViewport({ ...vp, panX: vp.panX + dx, panY: vp.panY + dy });
+        } else if (touchState.type === 'pinch') {
+          // Went from 2 fingers to 1 — switch to pan
+          touchState = { type: 'pan', lastX: t.clientX, lastY: t.clientY, startX: t.clientX, startY: t.clientY, moved: false };
+        }
+      }
+    }
+
+    function onTouchEnd(e) {
+      if (!touchState) return;
+
+      if (e.touches.length === 0) {
+        if (touchState.type === 'draw') {
+          if (currentStroke.current && currentStroke.current.points.length > 1 && onAddStroke) {
+            onAddStroke({ ...currentStroke.current });
+          }
+          currentStroke.current = null;
+          setDrawingPreview(null);
+        }
+        if (touchState.type === 'node-drag') {
+          setDraggingNodeId(null);
+          if (onNodeDragEnd) onNodeDragEnd();
+        }
+        if (touchState.type === 'pan' && !touchState.moved) {
+          onSelect(null, null);
+        }
+        touchState = null;
+      } else if (e.touches.length === 1 && touchState.type === 'pinch') {
+        const t = e.touches[0];
+        touchState = { type: 'pan', lastX: t.clientX, lastY: t.clientY, startX: t.clientX, startY: t.clientY, moved: false };
+      }
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: false });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, [isMobile, onUpdateViewport, onUpdateNode, onAddStroke, onSelect, onNodeDragEnd, screenToWorld]);
 
   /* ================================================================
      Mouse down on canvas background -> pan, draw, erase, or rect select

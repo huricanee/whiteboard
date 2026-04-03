@@ -10,6 +10,42 @@ const url = require('url');
 
 // --- Config ---
 const PORT = process.env.PORT || 3000;
+const BOT_TOKEN = process.env.BOT_TOKEN || '8354275871:AAEfOWq8BK_MbVrFjFqspewji3d9tmxNp24';
+const ALLOWED_USERS = new Set([
+  'huricane1',
+  // Add more usernames here
+]);
+
+// --- Telegram auth validation ---
+function validateTelegramData(initData) {
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+
+    const dataCheckString = [...params.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+
+    const secretKey = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(BOT_TOKEN)
+      .digest();
+
+    const calculatedHash = crypto
+      .createHmac('sha256', secretKey)
+      .update(dataCheckString)
+      .digest('hex');
+
+    if (calculatedHash !== hash) return null;
+
+    return JSON.parse(params.get('user'));
+  } catch {
+    return null;
+  }
+}
 const DB_SAVE_INTERVAL_MS = 2000;
 
 // --- Database ---
@@ -246,6 +282,20 @@ app.use(express.json());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.post('/api/auth', (req, res) => {
+  const { initData } = req.body;
+  if (!initData) return res.status(400).json({ ok: false, error: 'No initData' });
+
+  const user = validateTelegramData(initData);
+  if (!user) return res.status(401).json({ ok: false, error: 'Invalid signature' });
+
+  if (!ALLOWED_USERS.has(user.username)) {
+    return res.status(403).json({ ok: false, error: 'Not in whitelist' });
+  }
+
+  res.json({ ok: true, user: { id: user.id, username: user.username, firstName: user.first_name } });
 });
 
 app.get('/api/boards', async (_req, res) => {
