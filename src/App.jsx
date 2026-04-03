@@ -121,9 +121,14 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedType, setSelectedType] = useState(null); // 'node' | 'arrow' | null
 
-  // Unified tool mode: 'select' | 'draw' | 'eraser'
+  // Unified tool mode: 'select' | 'move' | 'draw' | 'eraser'
   const [toolMode, setToolMode] = useState('select');
   const [drawColor, setDrawColor] = useState('#6c8cff');
+  const [drawWidth, setDrawWidth] = useState(2);
+
+  // Draw options panel (double-tap draw button)
+  const [showDrawOptions, setShowDrawOptions] = useState(false);
+  const lastDrawTapRef = useRef(0);
 
   // Eraser state
   const [eraserMode, setEraserMode] = useState('object'); // 'object' | 'pixel'
@@ -539,11 +544,26 @@ export default function App() {
         setSelectedType(null);
         setSelection({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
         if (toolMode !== 'select') setToolMode('select');
+      setShowDrawOptions(false);
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectedId, selectedType, onDeleteNode, onDeleteArrow, selection, onDeleteSelection, undo, redo, toolMode]);
+
+  /* ================================================================
+     Draw button double-tap handler
+     ================================================================ */
+  const handleDrawTap = useCallback(() => {
+    const now = Date.now();
+    if (toolMode === 'draw' && now - lastDrawTapRef.current < 300) {
+      setShowDrawOptions(prev => !prev);
+    } else {
+      setToolMode('draw');
+      if (toolMode !== 'draw') setShowDrawOptions(false);
+    }
+    lastDrawTapRef.current = now;
+  }, [toolMode]);
 
   /* ================================================================
      Toolbar actions
@@ -665,7 +685,7 @@ export default function App() {
         {/* Tool mode buttons */}
         <button
           className={`toolbar-btn${toolMode === 'select' ? ' tool-active' : ''}`}
-          onClick={() => setToolMode('select')}
+          onClick={() => { setToolMode('select'); setShowDrawOptions(false); }}
           title="Select (pointer)"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -674,9 +694,19 @@ export default function App() {
           Select
         </button>
         <button
+          className={`toolbar-btn${toolMode === 'move' ? ' tool-active' : ''}`}
+          onClick={() => { setToolMode('move'); setShowDrawOptions(false); }}
+          title="Move (pan)"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 1v14M1 8h14M8 1l-2.5 2.5M8 1l2.5 2.5M8 15l-2.5-2.5M8 15l2.5-2.5M1 8l2.5-2.5M1 8l2.5 2.5M15 8l-2.5-2.5M15 8l-2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Move
+        </button>
+        <button
           className={`toolbar-btn${toolMode === 'draw' ? ' tool-active' : ''}`}
-          onClick={() => setToolMode('draw')}
-          title="Draw (freehand)"
+          onClick={handleDrawTap}
+          title="Draw (freehand, double-tap for options)"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2.5 13.5s1-2 3-4 4-3.5 5.5-5S13 2.5 13 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -685,7 +715,7 @@ export default function App() {
         </button>
         <button
           className={`toolbar-btn${toolMode === 'eraser' ? ' tool-active' : ''}`}
-          onClick={() => setToolMode('eraser')}
+          onClick={() => { setToolMode('eraser'); setShowDrawOptions(false); }}
           title="Eraser"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -793,6 +823,34 @@ export default function App() {
         )}
       </div>
 
+      {/* Draw options panel (color + width picker) */}
+      {showDrawOptions && toolMode === 'draw' && (
+        <div className="draw-options">
+          {PALETTE.map((c) => (
+            <button
+              key={c}
+              className={`color-swatch small${drawColor === c ? ' active' : ''}`}
+              style={{ background: c }}
+              onClick={() => setDrawColor(c)}
+              title={c}
+            />
+          ))}
+          <div className="toolbar-divider" />
+          {[1, 2, 4, 8].map((w) => (
+            <button
+              key={w}
+              className={`width-btn${drawWidth === w ? ' active' : ''}`}
+              onClick={() => setDrawWidth(w)}
+              title={`${w}px`}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" strokeWidth={w} strokeLinecap="round" />
+              </svg>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Canvas */}
       <Canvas
         nodes={nodes}
@@ -807,6 +865,7 @@ export default function App() {
         onSelect={onSelect}
         toolMode={toolMode}
         drawColor={drawColor}
+        drawWidth={drawWidth}
         drawStrokes={strokes}
         onAddStroke={onAddStroke}
         eraserMode={eraserMode}

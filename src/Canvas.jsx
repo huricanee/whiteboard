@@ -246,6 +246,35 @@ function rectsOverlap(a, b) {
 }
 
 /* ================================================================
+   Utility: compute bounding box of a selection (nodes + strokes)
+   ================================================================ */
+function getSelectionBounds(sel, nodes, strokes, heightMap) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const id of sel.nodeIds) {
+    const n = nodes[id];
+    if (!n) continue;
+    const w = n.width || 220;
+    const h = (heightMap && heightMap[id]) || 60;
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + w);
+    maxY = Math.max(maxY, n.y + h);
+  }
+  for (const id of sel.strokeIds) {
+    const s = (strokes || []).find(st => st.id === id);
+    if (!s || !s.points) continue;
+    for (const p of s.points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+  }
+  if (minX === Infinity) return null;
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+/* ================================================================
    CANVAS COMPONENT
    ================================================================ */
 export default function Canvas({
@@ -261,6 +290,7 @@ export default function Canvas({
   onSelect,
   toolMode,
   drawColor,
+  drawWidth,
   drawStrokes,
   onAddStroke,
   eraserMode,
@@ -298,6 +328,12 @@ export default function Canvas({
   /* ---- Refs for mobile touch handler closures ---- */
   const drawColorRef = useRef(drawColor);
   useEffect(() => { drawColorRef.current = drawColor; }, [drawColor]);
+  const drawWidthRef = useRef(drawWidth || 2);
+  useEffect(() => { drawWidthRef.current = drawWidth || 2; }, [drawWidth]);
+  const selectionRef = useRef(selection);
+  useEffect(() => { selectionRef.current = selection; }, [selection]);
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   /* ---- Freehand drawing state ---- */
   const currentStroke = useRef(null); // { points: [{x,y},...], color, width }
@@ -438,7 +474,11 @@ export default function Canvas({
 
   /* ================================================================
      Touch handling — MOBILE
-     1 finger: draw/pan/erase (depends on toolMode)
+     1 finger behavior depends on toolMode:
+       - 'move': pan
+       - 'draw': draw stroke
+       - 'eraser': erase
+       - 'select': tap node=select/edit, drag node=move, background=rect select
      2 fingers: ALWAYS pinch zoom + pan (any tool mode)
      ================================================================ */
   useEffect(() => {
@@ -451,32 +491,57 @@ export default function Canvas({
     const getDist = (t1, t2) => Math.sqrt((t1.clientX - t2.clientX) ** 2 + (t1.clientY - t2.clientY) ** 2);
     const getMid = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 });
 
+    // Helper: find if touch is near an anchor dot on any node (within threshold px)
+    function findNearAnchor(world, threshold) {
+      const currentNodes = nodesRef.current;
+      const hm = nodeHeightRef.current;
+      for (const nid of Object.keys(currentNodes)) {
+        const n = currentNodes[nid];
+        for (const a of ANCHORS) {
+          const pos = getAnchorPos(n, a, hm);
+          const dist = Math.sqrt((world.x - pos.x) ** 2 + (world.y - pos.y) ** 2);
+          if (dist < threshold / vpRef.current.zoom) {
+            return { nodeId: nid, anchor: a };
+          }
+        }
+      }
+      return null;
+    }
+
+    function switchToPinch(e) {
+      // Save partial stroke if we were drawing
+      if (touchState && touchState.type === 'draw' && currentStroke.current) {
+        if (currentStroke.current.points.length > 1 && onAddStroke) {
+          onAddStroke({ ...currentStroke.current });
+        }
+        currentStroke.current = null;
+        setDrawingPreview(null);
+      }
+      // Cancel any rect selection
+      if (touchState && touchState.type === 'rectSelect') {
+        setSelectRect(null);
+      }
+      const dist = getDist(e.touches[0], e.touches[1]);
+      const mid = getMid(e.touches[0], e.touches[1]);
+      const vp = vpRef.current;
+      touchState = {
+        type: 'pinch',
+        initialDist: dist,
+        initialZoom: vp.zoom,
+        initialPanX: vp.panX,
+        initialPanY: vp.panY,
+        lastMid: mid,
+      };
+    }
+
     function onTouchStart(e) {
-      // Don't capture touches on toolbar
-      if (e.target.closest('.toolbar')) return;
+      // Don't capture touches on toolbar or draw options
+      if (e.target.closest('.toolbar') || e.target.closest('.draw-options')) return;
       e.preventDefault();
 
+      // 2 fingers: ALWAYS pinch zoom + pan, regardless of tool
       if (e.touches.length === 2) {
-        // Always switch to pinch, even if was drawing
-        if (touchState && touchState.type === 'draw' && currentStroke.current) {
-          // Save the partial stroke before switching to pinch
-          if (currentStroke.current.points.length > 1 && onAddStroke) {
-            onAddStroke({ ...currentStroke.current });
-          }
-          currentStroke.current = null;
-          setDrawingPreview(null);
-        }
-        const dist = getDist(e.touches[0], e.touches[1]);
-        const mid = getMid(e.touches[0], e.touches[1]);
-        const vp = vpRef.current;
-        touchState = {
-          type: 'pinch',
-          initialDist: dist,
-          initialZoom: vp.zoom,
-          initialPanX: vp.panX,
-          initialPanY: vp.panY,
-          lastMid: mid,
-        };
+        switchToPinch(e);
         return;
       }
 
@@ -502,28 +567,116 @@ export default function Canvas({
           }
         }
 
-        if (hitNodeId && mode === 'select') {
-          // Drag node
-          const n = currentNodes[hitNodeId];
-          onSelect(hitNodeId, 'node');
+        // === SELECT MODE ===
+        if (mode === 'select') {
+          // Check if touch is near an anchor -> start arrow creation
+          const anchorHit = findNearAnchor(world, 20);
+          if (anchorHit) {
+            touchState = {
+              type: 'arrow-preview',
+              fromNodeId: anchorHit.nodeId,
+              fromAnchor: anchorHit.anchor,
+              moved: false,
+            };
+            setArrowPreview({
+              fromNodeId: anchorHit.nodeId,
+              fromAnchor: anchorHit.anchor,
+              cursorX: world.x,
+              cursorY: world.y,
+              snapNodeId: null,
+              snapAnchor: null,
+            });
+            return;
+          }
+
+          if (hitNodeId) {
+            // Check if part of multi-selection -> group drag
+            const sel = selectionRef.current;
+            if (sel.nodeIds.has(hitNodeId) && (sel.nodeIds.size > 1 || sel.strokeIds.size > 0)) {
+              touchState = {
+                type: 'selectionDrag',
+                startWorldX: world.x,
+                startWorldY: world.y,
+                lastWorldX: world.x,
+                lastWorldY: world.y,
+              };
+              return;
+            }
+            // Drag single node
+            const n = currentNodes[hitNodeId];
+            onSelect(hitNodeId, 'node');
+            touchState = {
+              type: 'node-drag',
+              nodeId: hitNodeId,
+              offsetX: world.x - n.x,
+              offsetY: world.y - n.y,
+              startX: t.clientX,
+              startY: t.clientY,
+              moved: false,
+            };
+            setDraggingNodeId(hitNodeId);
+            return;
+          }
+
+          // Check if inside selection bounding box -> drag selection (strokes only case)
+          const sel = selectionRef.current;
+          if (sel.strokeIds.size > 0 || sel.nodeIds.size > 0) {
+            const bounds = getSelectionBounds(sel, currentNodes, drawStrokesRef.current, hm);
+            if (bounds && world.x >= bounds.x && world.x <= bounds.x + bounds.w &&
+                world.y >= bounds.y && world.y <= bounds.y + bounds.h) {
+              touchState = {
+                type: 'selectionDrag',
+                startWorldX: world.x,
+                startWorldY: world.y,
+                lastWorldX: world.x,
+                lastWorldY: world.y,
+              };
+              return;
+            }
+          }
+
+          // Background tap in select mode -> rect selection (not pan)
+          onSelect(null, null);
+          onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
           touchState = {
-            type: 'node-drag',
-            nodeId: hitNodeId,
-            offsetX: world.x - n.x,
-            offsetY: world.y - n.y,
+            type: 'rectSelect',
+            startWorld: world,
+            startScreen: { x: mx, y: my },
+            moved: false,
           };
-          setDraggingNodeId(hitNodeId);
           return;
         }
 
+        // === MOVE MODE ===
+        if (mode === 'move') {
+          touchState = {
+            type: 'pan',
+            lastX: t.clientX,
+            lastY: t.clientY,
+            startX: t.clientX,
+            startY: t.clientY,
+            moved: false,
+          };
+          return;
+        }
+
+        // === DRAW MODE ===
         if (mode === 'draw') {
-          currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColorRef.current || '#6c8cff', width: 2 };
+          currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColorRef.current || '#6c8cff', width: drawWidthRef.current || 2 };
           touchState = { type: 'draw' };
           setDrawingPreview(pointsToPath([{ x: world.x, y: world.y }]));
           return;
         }
 
-        // Default: pan
+        // === ERASER MODE ===
+        if (mode === 'eraser') {
+          touchState = { type: 'erase' };
+          setEraserCursor(world);
+          if (performEraseRef.current) performEraseRef.current(world.x, world.y);
+          return;
+        }
+
+        // Fallback: pan
         touchState = {
           type: 'pan',
           lastX: t.clientX,
@@ -539,8 +692,12 @@ export default function Canvas({
       if (!touchState) return;
       e.preventDefault();
 
-      if (e.touches.length === 2 && touchState.type === 'pinch') {
-        // Pinch zoom (AVRO pattern)
+      // 2 fingers: always pinch
+      if (e.touches.length === 2) {
+        if (touchState.type !== 'pinch') {
+          switchToPinch(e);
+          return;
+        }
         const dist = getDist(e.touches[0], e.touches[1]);
         const mid = getMid(e.touches[0], e.touches[1]);
         const scale = dist / touchState.initialDist;
@@ -562,20 +719,96 @@ export default function Canvas({
         const rect = el.getBoundingClientRect();
         const mx = t.clientX - rect.left;
         const my = t.clientY - rect.top;
+        const vp = vpRef.current;
+        const wx = (mx - vp.panX) / vp.zoom;
+        const wy = (my - vp.panY) / vp.zoom;
 
         if (touchState.type === 'draw') {
-          const vp = vpRef.current;
-          const wx = (mx - vp.panX) / vp.zoom;
-          const wy = (my - vp.panY) / vp.zoom;
           if (currentStroke.current) {
             currentStroke.current.points.push({ x: wx, y: wy });
             setDrawingPreview(pointsToPath(currentStroke.current.points));
           }
+        } else if (touchState.type === 'erase') {
+          setEraserCursor({ x: wx, y: wy });
+          if (performEraseRef.current) performEraseRef.current(wx, wy);
         } else if (touchState.type === 'node-drag') {
-          const vp = vpRef.current;
-          const wx = (mx - vp.panX) / vp.zoom;
-          const wy = (my - vp.panY) / vp.zoom;
+          touchState.moved = true;
           onUpdateNode(touchState.nodeId, { x: snap(wx - touchState.offsetX), y: snap(wy - touchState.offsetY) });
+        } else if (touchState.type === 'selectionDrag') {
+          const dx = snap(wx - touchState.lastWorldX);
+          const dy = snap(wy - touchState.lastWorldY);
+          if (dx !== 0 || dy !== 0) {
+            onMoveSelection(dx, dy);
+            touchState.lastWorldX += dx;
+            touchState.lastWorldY += dy;
+          }
+        } else if (touchState.type === 'rectSelect') {
+          touchState.moved = true;
+          const currentWorld = { x: wx, y: wy };
+          const startWorld = touchState.startWorld;
+          const rx = Math.min(startWorld.x, currentWorld.x);
+          const ry = Math.min(startWorld.y, currentWorld.y);
+          const rw = Math.abs(currentWorld.x - startWorld.x);
+          const rh = Math.abs(currentWorld.y - startWorld.y);
+          setSelectRect({ x: rx, y: ry, w: rw, h: rh });
+
+          // Compute selection
+          const selRect = { x: rx, y: ry, w: rw, h: rh };
+          const currentNodes = nodesRef.current;
+          const currentArrows = arrowsRef.current;
+          const currentStrokes = drawStrokesRef.current || [];
+          const hm = nodeHeightRef.current;
+
+          const selNodeIds = new Set();
+          const selStrokeIds = new Set();
+          const selArrowIds = new Set();
+
+          for (const node of Object.values(currentNodes)) {
+            const nw = node.width || 220;
+            const nh = (hm && hm[node.id]) || 60;
+            const nodeRect = { x: node.x, y: node.y, w: nw, h: nh };
+            if (rectsOverlap(selRect, nodeRect)) {
+              selNodeIds.add(node.id);
+            }
+          }
+
+          for (const stroke of currentStrokes) {
+            if (stroke.points && stroke.points.some(p => p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh)) {
+              selStrokeIds.add(stroke.id);
+            }
+          }
+
+          for (const [aId, arrow] of Object.entries(currentArrows)) {
+            if (selNodeIds.has(arrow.fromNodeId) || selNodeIds.has(arrow.toNodeId)) {
+              selArrowIds.add(aId);
+            }
+          }
+
+          onSelectionChange({ nodeIds: selNodeIds, arrowIds: selArrowIds, strokeIds: selStrokeIds });
+        } else if (touchState.type === 'arrow-preview') {
+          touchState.moved = true;
+          const currentNodes = nodesRef.current;
+          const hm = nodeHeightRef.current;
+          let snapNodeId = null;
+          let snapAnchor = null;
+          const SNAP_DIST = 30;
+          for (const nid of Object.keys(currentNodes)) {
+            if (nid === touchState.fromNodeId) continue;
+            const { anchor, dist } = closestAnchor(currentNodes[nid], wx, wy, hm);
+            if (dist < SNAP_DIST) {
+              snapNodeId = nid;
+              snapAnchor = anchor;
+              break;
+            }
+          }
+          setArrowPreview({
+            fromNodeId: touchState.fromNodeId,
+            fromAnchor: touchState.fromAnchor,
+            cursorX: wx,
+            cursorY: wy,
+            snapNodeId,
+            snapAnchor,
+          });
         } else if (touchState.type === 'pan') {
           const dx = t.clientX - touchState.lastX;
           const dy = t.clientY - touchState.lastY;
@@ -583,10 +816,9 @@ export default function Canvas({
           touchState.moved = true;
           touchState.lastX = t.clientX;
           touchState.lastY = t.clientY;
-          const vp = vpRef.current;
           onUpdateViewport({ ...vp, panX: vp.panX + dx, panY: vp.panY + dy });
         } else if (touchState.type === 'pinch') {
-          // Went from 2 fingers to 1 — switch to pan
+          // Went from 2 fingers to 1 -- switch to pan
           touchState = { type: 'pan', lastX: t.clientX, lastY: t.clientY, startX: t.clientX, startY: t.clientY, moved: false };
         }
       }
@@ -603,9 +835,43 @@ export default function Canvas({
           currentStroke.current = null;
           setDrawingPreview(null);
         }
+        if (touchState.type === 'erase') {
+          setEraserCursor(null);
+        }
         if (touchState.type === 'node-drag') {
           setDraggingNodeId(null);
           if (onNodeDragEnd) onNodeDragEnd();
+          // Tap on node (no drag movement): select it, tap again -> edit
+          if (!touchState.moved) {
+            const nodeId = touchState.nodeId;
+            // If already selected, start editing
+            if (selectedIdRef.current === nodeId) {
+              setEditingNodeId(nodeId);
+              editingRef.current = nodeId;
+            } else {
+              onSelect(nodeId, 'node');
+            }
+          }
+        }
+        if (touchState.type === 'selectionDrag') {
+          if (onSelectionDragEnd) onSelectionDragEnd();
+        }
+        if (touchState.type === 'rectSelect') {
+          setSelectRect(null);
+          if (!touchState.moved) {
+            // Simple tap on background: deselect
+            onSelect(null, null);
+            onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
+          }
+        }
+        if (touchState.type === 'arrow-preview') {
+          // Complete arrow creation if snapped
+          setArrowPreview((prev) => {
+            if (prev && prev.snapNodeId && prev.snapAnchor) {
+              onAddArrow(prev.fromNodeId, prev.fromAnchor, prev.snapNodeId, prev.snapAnchor);
+            }
+            return null;
+          });
         }
         if (touchState.type === 'pan' && !touchState.moved) {
           onSelect(null, null);
@@ -627,7 +893,7 @@ export default function Canvas({
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchEnd);
     };
-  }, [isMobile, onUpdateViewport, onUpdateNode, onAddStroke, onSelect, onNodeDragEnd, screenToWorld]);
+  }, [isMobile, onUpdateViewport, onUpdateNode, onAddStroke, onAddArrow, onSelect, onNodeDragEnd, onSelectionDragEnd, onMoveSelection, onSelectionChange, screenToWorld]);
 
   /* ================================================================
      Mouse down on canvas background -> pan, draw, erase, or rect select
@@ -659,7 +925,7 @@ export default function Canvas({
     if (toolMode === 'draw') {
       // Start freehand drawing
       e.preventDefault();
-      currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColor || '#6c8cff', width: 2 };
+      currentStroke.current = { points: [{ x: world.x, y: world.y }], color: drawColor || '#6c8cff', width: drawWidth || 2 };
       dragState.current = { type: 'draw' };
       setDrawingPreview(pointsToPath([{ x: world.x, y: world.y }]));
       return;
@@ -674,8 +940,39 @@ export default function Canvas({
       return;
     }
 
+    // Move mode: always pan
+    if (toolMode === 'move') {
+      e.preventDefault();
+      rootRef.current?.classList.add('panning');
+      dragState.current = {
+        type: 'pan',
+        startX: mx,
+        startY: my,
+        startPanX: vpRef.current.panX,
+        startPanY: vpRef.current.panY,
+      };
+      return;
+    }
+
     // Select mode: check if clicking on empty space -> start rect selection or pan
     if (toolMode === 'select') {
+      // Check if click is inside selection bounding box (for stroke-only selection drag)
+      const sel = selection;
+      const selBounds = getSelectionBounds(sel, nodesRef.current, drawStrokesRef.current, nodeHeightRef.current);
+      if ((sel.nodeIds.size > 0 || sel.strokeIds.size > 0) && selBounds &&
+          world.x >= selBounds.x && world.x <= selBounds.x + selBounds.w &&
+          world.y >= selBounds.y && world.y <= selBounds.y + selBounds.h) {
+        e.preventDefault();
+        dragState.current = {
+          type: 'selectionDrag',
+          startWorldX: world.x,
+          startWorldY: world.y,
+          lastWorldX: world.x,
+          lastWorldY: world.y,
+        };
+        return;
+      }
+
       // Clear selection and single-select
       onSelect(null, null);
       onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
@@ -692,7 +989,7 @@ export default function Canvas({
       };
       return;
     }
-  }, [onSelect, toolMode, drawColor, screenToWorld, onSelectionChange]);
+  }, [onSelect, toolMode, drawColor, drawWidth, screenToWorld, onSelectionChange, selection]);
 
   /* ================================================================
      Eraser perform helper
@@ -1307,7 +1604,13 @@ export default function Canvas({
   // Determine cursor class based on tool mode
   const cursorClass = toolMode === 'draw' ? ' draw-mode'
     : toolMode === 'eraser' ? ' eraser-mode'
+    : toolMode === 'move' ? ' move-mode'
     : '';
+
+  // Compute stroke selection bounding box for visual indicator
+  const strokeSelBounds = (selection.strokeIds.size > 0)
+    ? getSelectionBounds({ nodeIds: new Set(), strokeIds: selection.strokeIds }, {}, drawStrokes, nodeHeightMap)
+    : null;
 
   return (
     <div
@@ -1386,6 +1689,24 @@ export default function Canvas({
               className="selection-rect"
               strokeWidth={1 / zoom}
               strokeDasharray={`${6 / zoom} ${4 / zoom}`}
+            />
+          </svg>
+        )}
+
+        {/* Stroke selection bounding box */}
+        {strokeSelBounds && (
+          <svg className="select-rect-layer" width="1" height="1">
+            <rect
+              x={strokeSelBounds.x - 4 / zoom}
+              y={strokeSelBounds.y - 4 / zoom}
+              width={strokeSelBounds.w + 8 / zoom}
+              height={strokeSelBounds.h + 8 / zoom}
+              className="stroke-selection-rect"
+              fill="none"
+              stroke="#6c8cff"
+              strokeWidth={1.5 / zoom}
+              strokeDasharray={`${5 / zoom} ${3 / zoom}`}
+              opacity={0.6}
             />
           </svg>
         )}
