@@ -1548,16 +1548,7 @@ export default function Canvas({
               suppressContentEditableWarning
               onBlur={(e) => onArrowLabelBlur(e, aId)}
               onKeyDown={onArrowLabelKeyDown}
-              onInput={(e) => {
-                // Enforce ~20 chars per line via max-width in CSS; no hard char limit needed
-                const text = e.target.innerText;
-                if (text.length > 60) {
-                  e.target.innerText = text.slice(0, 60);
-                  // Move cursor to end
-                  const r = document.createRange(); r.selectNodeContents(e.target); r.collapse(false);
-                  const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
-                }
-              }}
+              onInput={() => {}}
               onClick={(e) => e.stopPropagation()}
               onDoubleClick={(e) => { e.stopPropagation(); onArrowDoubleClick(e, aId); }}
               ref={(el) => { if (el && isEditingLabel) { el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } }}
