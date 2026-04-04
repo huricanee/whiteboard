@@ -542,7 +542,12 @@ export default function Canvas({
     function onTouchStart(e) {
       // Don't capture touches on toolbar or draw options
       if (e.target.closest('.toolbar') || e.target.closest('.draw-options')) return;
-      e.preventDefault();
+
+      // Allow native focus if tapping on a node-text element (for keyboard on mobile)
+      const tappedNodeText = e.target.closest('.node-text');
+      if (!tappedNodeText) {
+        e.preventDefault();
+      }
 
       // 2 fingers: ALWAYS pinch zoom + pan, regardless of tool
       if (e.touches.length === 2) {
@@ -557,6 +562,11 @@ export default function Canvas({
         const my = t.clientY - rect.top;
         const world = screenToWorld(mx, my);
         const mode = toolModeRef.current;
+
+        // If tapped directly on node text, let native focus handle it (skip drag)
+        if (tappedNodeText) {
+          return;
+        }
 
         // Check if touching a node
         const currentNodes = nodesRef.current;
@@ -1627,9 +1637,11 @@ export default function Canvas({
       >
         <span
           className="node-text"
-          contentEditable={isEditing}
+          contentEditable={isMobile || isEditing}
           suppressContentEditableWarning
+          readOnly={isMobile && !isEditing ? true : undefined}
           onClick={(e) => onTextClick(e, node.id)}
+          onFocus={() => { if (isMobile) { onSelect(node.id, 'node'); setEditingNodeId(node.id); editingRef.current = node.id; } }}
           onBlur={(e) => onTextBlur(e, node.id)}
           onKeyDown={(e) => onTextKeyDown(e, node.id)}
           onInput={(e) => {
