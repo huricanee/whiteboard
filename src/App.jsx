@@ -19,7 +19,7 @@ function useMobile() {
 /* ================================================================
    Constants
    ================================================================ */
-const STORAGE_KEY = 'whiteboard-data';
+function storageKey(boardId) { return `whiteboard-data-${boardId}`; }
 const SAVE_DEBOUNCE = 500;
 const MAX_HISTORY = 50;
 const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
@@ -52,9 +52,9 @@ function genId(prefix = 'n') {
 /* ================================================================
    Load persisted state
    ================================================================ */
-function loadState() {
+function loadState(bid) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(bid));
     if (raw) {
       const parsed = JSON.parse(raw);
       // Bump nextId past any existing IDs
@@ -144,7 +144,7 @@ export default function App() {
     setSelectedType(null);
   }, []);
 
-  const [state, setState] = useState(() => loadState() || defaultState());
+  const [state, setState] = useState(() => loadState(getBoardId()) || defaultState());
   const [selectedId, setSelectedId] = useState(null);
   const [selectedType, setSelectedType] = useState(null); // 'node' | 'arrow' | null
 
@@ -165,7 +165,7 @@ export default function App() {
   const [selection, setSelection] = useState({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
 
   // Undo/Redo history
-  const [history, setHistory] = useState(() => [takeSnapshot(loadState() || defaultState())]);
+  const [history, setHistory] = useState(() => [takeSnapshot(loadState(getBoardId()) || defaultState())]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const historyLock = useRef(false); // prevent pushing history during undo/redo
 
@@ -255,7 +255,7 @@ export default function App() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        localStorage.setItem(storageKey(boardId), JSON.stringify({
           nodes: state.nodes,
           arrows: state.arrows,
           viewport: state.viewport,
@@ -266,13 +266,13 @@ export default function App() {
       }
     }, SAVE_DEBOUNCE);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [state]);
+  }, [state, boardId]);
 
   /* ================================================================
      History management
      ================================================================ */
   // Use refs for history to avoid stale closure issues
-  const historyRef = useRef([takeSnapshot(loadState() || defaultState())]);
+  const historyRef = useRef([takeSnapshot(loadState(getBoardId()) || defaultState())]);
   const historyIndexRef = useRef(0);
 
   const pushHistorySnapshot = useCallback((newState) => {
