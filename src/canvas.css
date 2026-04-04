@@ -495,6 +495,92 @@
 /* ============================================================
    Auth gate
    ============================================================ */
+/* ============================================================
+   Board picker
+   ============================================================ */
+.board-picker-container {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 102;
+}
+
+.board-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--toolbar-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s;
+}
+
+.board-picker-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.board-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--toolbar-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.board-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+  border: none;
+  background: none;
+}
+
+.board-picker-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.board-picker-item.active {
+  color: var(--accent);
+}
+
+.board-picker-check {
+  color: var(--accent);
+  font-size: 14px;
+}
+
+@media (max-width: 768px) {
+  .board-picker-container {
+    top: auto;
+    bottom: 60px;
+    left: 12px;
+  }
+  .board-picker-dropdown {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+}
+
 .auth-gate {
   display: flex;
   align-items: center;

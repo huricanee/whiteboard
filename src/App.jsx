@@ -24,13 +24,20 @@ const SAVE_DEBOUNCE = 500;
 const MAX_HISTORY = 50;
 const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
 
-// Board ID from URL hash, or generate one
+// Board definitions — each user sees boards they have access to
+const BOARDS = [
+  { id: 'eortvlz2', name: 'Physics & Math', access: 'all' },
+  { id: 'huricane_personal', name: 'Personal', access: ['huricane1'] },
+];
+
+function getBoardsForUser(username) {
+  return BOARDS.filter(b => b.access === 'all' || (Array.isArray(b.access) && b.access.includes(username)));
+}
+
 function getBoardId() {
   const hash = window.location.hash.slice(1);
   if (hash && hash.length >= 4) return hash;
-  const id = Math.random().toString(36).slice(2, 10);
-  window.location.hash = id;
-  return id;
+  return BOARDS[0].id;
 }
 const PALETTE = [
   '#6c8cff', '#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#38d9a9',
@@ -114,8 +121,28 @@ function applySnapshot(state, snapshot) {
    APP COMPONENT
    ================================================================ */
 export default function App() {
-  const { authorized, loading, error } = useTelegramAuth();
+  const { authorized, loading, error, user } = useTelegramAuth();
   const isMobile = useMobile();
+
+  const username = user?.username || '';
+  const userBoards = getBoardsForUser(username);
+  const [boardId, setBoardId] = useState(() => {
+    const id = getBoardId();
+    window.location.hash = id;
+    return id;
+  });
+  const [showBoardPicker, setShowBoardPicker] = useState(false);
+  const currentBoard = userBoards.find(b => b.id === boardId) || userBoards[0];
+
+  const switchBoard = useCallback((newId) => {
+    window.location.hash = newId;
+    setBoardId(newId);
+    setShowBoardPicker(false);
+    // Clear local state — will reload from server via WebSocket init
+    setState(defaultState());
+    setSelectedId(null);
+    setSelectedType(null);
+  }, []);
 
   const [state, setState] = useState(() => loadState() || defaultState());
   const [selectedId, setSelectedId] = useState(null);
@@ -145,7 +172,7 @@ export default function App() {
   const { nodes, arrows, viewport, strokes = [] } = state;
 
   // --- Real-time sync ---
-  const boardId = useRef(getBoardId()).current;
+  // boardId is managed as state above (for board switching)
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -686,6 +713,35 @@ export default function App() {
 
   return (
     <>
+      {/* Board picker — only shown if user has multiple boards */}
+      {userBoards.length > 1 && (
+        <div className="board-picker-container">
+          <button className="board-picker-btn" onClick={() => setShowBoardPicker(p => !p)}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+            {currentBoard?.name || 'Board'}
+          </button>
+          {showBoardPicker && (
+            <div className="board-picker-dropdown">
+              {userBoards.map(b => (
+                <button
+                  key={b.id}
+                  className={`board-picker-item${b.id === boardId ? ' active' : ''}`}
+                  onClick={() => switchBoard(b.id)}
+                >
+                  {b.name}
+                  {b.id === boardId && <span className="board-picker-check">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="toolbar">
         <button className="toolbar-btn" onClick={handleAddNode} title="Add Node">
