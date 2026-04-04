@@ -136,12 +136,10 @@ export default function App() {
 
   const switchBoard = useCallback((newId) => {
     window.location.hash = newId;
-    setBoardId(newId);
     setShowBoardPicker(false);
-    // Clear local state — will reload from server via WebSocket init
-    setState(defaultState());
-    setSelectedId(null);
-    setSelectedType(null);
+    // Full page reload is the cleanest way to switch boards —
+    // avoids stale state, history bleed, and sync race conditions
+    window.location.reload();
   }, []);
 
   const [state, setState] = useState(() => loadState(getBoardId()) || defaultState());
