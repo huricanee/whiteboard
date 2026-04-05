@@ -26,7 +26,7 @@ const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
 
 // Board definitions — each user sees boards they have access to
 const BOARDS = [
-  { id: 'eortvlz2', name: 'Physics & Math', access: 'all' },
+  { id: 'eortvlz2', name: 'Physics & Math', access: ['huricane1', 'masofita', 'Kxmaruthebest', 'meyiapir', 'faccc1less', 'grixylaa'] },
   { id: 'huricane_personal', name: 'Personal', access: ['huricane1'] },
   { id: 'huricane_maria', name: 'H & M', access: ['huricane1', 'maria_art_psy'] },
 ];
