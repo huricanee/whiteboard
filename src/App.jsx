@@ -244,6 +244,7 @@ export default function App() {
     getState: () => stateRef.current,
     applyDelta,
     replaceState,
+    username,
   });
 
   /* ================================================================

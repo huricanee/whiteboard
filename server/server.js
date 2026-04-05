@@ -28,6 +28,19 @@ const ALLOWED_USERS = new Set([
   'maria_art_psy',
 ]);
 
+// Board access control (must match frontend BOARDS config)
+const BOARD_ACCESS = {
+  'eortvlz2': ['huricane1', 'masofita', 'Kxmaruthebest', 'meyiapir', 'faccc1less', 'grixylaa'],
+  'huricane_personal': ['huricane1'],
+  'huricane_maria': ['huricane1', 'maria_art_psy'],
+};
+
+function canAccessBoard(username, boardId) {
+  const access = BOARD_ACCESS[boardId];
+  if (!access) return true; // unknown boards are open (auto-created)
+  return access.includes(username);
+}
+
 // --- Telegram auth validation ---
 function validateTelegramData(initData) {
   try {
@@ -567,6 +580,15 @@ wss.on('connection', async (ws, request) => {
   const boardId = request.boardId;
   const userId = generateId();
   const color = randomColor();
+
+  // Check board access control
+  const params = new URLSearchParams(url.parse(request.url).query || '');
+  const wsUsername = params.get('user');
+  if (wsUsername && !canAccessBoard(wsUsername, boardId)) {
+    console.log(`[${boardId}] Access denied for ${wsUsername}`);
+    ws.close(4003, 'Access denied');
+    return;
+  }
 
   // Verify board exists (or auto-create)
   if (pool && dbReady) {

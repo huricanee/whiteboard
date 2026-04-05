@@ -13,6 +13,7 @@ export default function useSync(serverUrl, boardId, {
   getState,      // () => { nodes, arrows, strokes }
   applyDelta,    // (delta) => void — apply a remote delta to local state
   replaceState,  // (state) => void — full state replace (init / undo from remote)
+  username,      // Telegram username for board access control
 }) {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
@@ -26,7 +27,7 @@ export default function useSync(serverUrl, boardId, {
 
     const protocol = serverUrl.startsWith('https') ? 'wss' : 'ws';
     const host = serverUrl.replace(/^https?:\/\//, '');
-    const url = `${protocol}://${host}/ws/${boardId}`;
+    const url = `${protocol}://${host}/ws/${boardId}${username ? '?user=' + encodeURIComponent(username) : ''}`;
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
