@@ -129,8 +129,11 @@ export default function App() {
   const userBoards = getBoardsForUser(username);
   const [boardId, setBoardId] = useState(() => {
     const id = getBoardId();
-    window.location.hash = id;
-    return id;
+    // If user has no access to this board, redirect to their first available board
+    const hasAccess = userBoards.some(b => b.id === id);
+    const finalId = hasAccess ? id : (userBoards[0]?.id || id);
+    window.location.hash = finalId;
+    return finalId;
   });
   const [showBoardPicker, setShowBoardPicker] = useState(false);
   const currentBoard = userBoards.find(b => b.id === boardId) || userBoards[0];

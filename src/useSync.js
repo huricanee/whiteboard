@@ -71,9 +71,14 @@ export default function useSync(serverUrl, boardId, {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConnected(false);
       wsRef.current = null;
+      // Don't reconnect if access denied
+      if (event.code === 4003) {
+        console.warn('[sync] Access denied to board');
+        return;
+      }
       // Reconnect with backoff
       const delay = reconnectDelay.current;
       reconnectDelay.current = Math.min(delay * 1.5, RECONNECT_MAX);
