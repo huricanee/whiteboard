@@ -25,6 +25,7 @@ const ALLOWED_USERS = new Set([
   'meyiapir',
   't3hge',
   'masofita',
+  'maria_art_psy',
 ]);
 
 // --- Telegram auth validation ---

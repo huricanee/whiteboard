@@ -28,6 +28,7 @@ const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
 const BOARDS = [
   { id: 'eortvlz2', name: 'Physics & Math', access: 'all' },
   { id: 'huricane_personal', name: 'Personal', access: ['huricane1'] },
+  { id: 'huricane_maria', name: 'H & M', access: ['huricane1', 'maria_art_psy'] },
 ];
 
 function getBoardsForUser(username) {
