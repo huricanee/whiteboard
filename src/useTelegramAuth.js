@@ -30,9 +30,10 @@ export default function useTelegramAuth() {
       // Corrupted localStorage, continue to other auth methods
     }
 
-    // Check 2: Telegram Mini App
+    // Check 2: Telegram Mini App (only if actually opened inside Telegram)
     const tg = window.Telegram?.WebApp;
-    if (!tg) {
+    const initData = tg?.initData;
+    if (!tg || !initData) {
       // Not in Telegram and not logged in via web → show login page
       setState({ authorized: false, loading: false, user: null, error: 'not_authenticated' });
       return;
@@ -40,12 +41,6 @@ export default function useTelegramAuth() {
 
     tg.ready();
     tg.expand();
-
-    const initData = tg.initData;
-    if (!initData) {
-      setState({ authorized: false, loading: false, user: null, error: 'No Telegram init data' });
-      return;
-    }
 
     fetch(`${SERVER_URL}/api/auth`, {
       method: 'POST',
