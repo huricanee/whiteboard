@@ -25,16 +25,7 @@ const SAVE_DEBOUNCE = 500;
 const MAX_HISTORY = 50;
 const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
 
-// Board definitions — each user sees boards they have access to
-const BOARDS = [
-  { id: 'eortvlz2', name: 'Physics & Math', access: ['huricane1', 'masofita', 'Kxmaruthebest', 'meyiapir', 'faccc1less', 'grixylaa'] },
-  { id: 'huricane_personal', name: 'Personal', access: ['huricane1'] },
-  { id: 'huricane_maria', name: 'H & M', access: ['huricane1', 'maria_art_psy'] },
-];
-
-function getBoardsForUser(username) {
-  return BOARDS.filter(b => b.access === 'all' || (Array.isArray(b.access) && b.access.includes(username)));
-}
+// Boards are loaded from the server per-user (no more hardcoded list)
 
 function getBoardId() {
   const hash = window.location.hash.slice(1);
@@ -117,6 +108,134 @@ function applySnapshot(state, snapshot) {
     arrows: snapshot.arrows,
     strokes: snapshot.strokes,
   };
+}
+
+/* ================================================================
+   Members panel — shown as overlay for board owners
+   ================================================================ */
+function MembersPanel({ boardId, authToken }) {
+  const [open, setOpen] = useState(false);
+  const [members, setMembers] = useState([]);
+  const [inviteUsername, setInviteUsername] = useState('');
+  const [inviteRole, setInviteRole] = useState('editor');
+  const [status, setStatus] = useState(null); // { type: 'ok'|'err', msg }
+
+  const loadMembers = useCallback(() => {
+    fetch(`${SERVER_URL}/api/boards/${boardId}/members`, {
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    })
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setMembers(data); });
+  }, [boardId, authToken]);
+
+  useEffect(() => { if (open) loadMembers(); }, [open, loadMembers]);
+
+  async function handleInvite() {
+    const name = inviteUsername.trim().replace(/^@/, '');
+    if (!name) return;
+    setStatus(null);
+    const res = await fetch(`${SERVER_URL}/api/boards/${boardId}/invite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify({ username: name, role: inviteRole }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus({ type: 'ok', msg: `${name} added as ${data.role}` });
+      setInviteUsername('');
+      loadMembers();
+    } else {
+      setStatus({ type: 'err', msg: data.error || 'Failed' });
+    }
+  }
+
+  async function handleRemove(username) {
+    if (!confirm(`Remove ${username} from this board?`)) return;
+    await fetch(`${SERVER_URL}/api/boards/${boardId}/members/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    });
+    loadMembers();
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        style={{
+          position: 'fixed', top: 10, right: 10, zIndex: 1000,
+          padding: '6px 12px', background: '#2a2a4a', color: '#aaa',
+          border: '1px solid #3a3a5a', borderRadius: '8px', cursor: 'pointer',
+          fontSize: '0.8rem',
+        }}
+      >
+        Members
+      </button>
+    );
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', top: 10, right: 10, zIndex: 1000,
+      width: '260px', background: '#1e1e36', border: '1px solid #3a3a5a',
+      borderRadius: '10px', padding: '12px', color: '#e0e0e0',
+      fontSize: '0.85rem', boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <b>Members</b>
+        <button onClick={() => setOpen(false)} style={{
+          background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1rem',
+        }}>×</button>
+      </div>
+
+      {members.map(m => (
+        <div key={m.username} style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '4px 0', borderBottom: '1px solid #2a2a4a',
+        }}>
+          <span>{m.username} <span style={{ color: '#666', fontSize: '0.75rem' }}>({m.role})</span></span>
+          {m.role !== 'owner' && (
+            <button onClick={() => handleRemove(m.username)} style={{
+              background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer', fontSize: '0.75rem',
+            }}>remove</button>
+          )}
+        </div>
+      ))}
+
+      <div style={{ marginTop: '10px', display: 'flex', gap: '4px' }}>
+        <input
+          placeholder="@username"
+          value={inviteUsername}
+          onChange={e => setInviteUsername(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleInvite()}
+          style={{
+            flex: 1, padding: '6px', background: '#2a2a4a', color: '#e0e0e0',
+            border: '1px solid #3a3a5a', borderRadius: '6px', fontSize: '0.8rem', outline: 'none',
+          }}
+        />
+        <select
+          value={inviteRole}
+          onChange={e => setInviteRole(e.target.value)}
+          style={{
+            padding: '4px', background: '#2a2a4a', color: '#e0e0e0',
+            border: '1px solid #3a3a5a', borderRadius: '6px', fontSize: '0.75rem',
+          }}
+        >
+          <option value="editor">editor</option>
+          <option value="viewer">viewer</option>
+        </select>
+        <button onClick={handleInvite} style={{
+          padding: '4px 8px', background: '#6c8cff', color: 'white',
+          border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
+        }}>+</button>
+      </div>
+      {status && (
+        <div style={{ marginTop: '6px', color: status.type === 'ok' ? '#69db7c' : '#ff6b6b', fontSize: '0.75rem' }}>
+          {status.msg}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ================================================================
@@ -230,23 +349,34 @@ export default function App() {
   const isMobile = useMobile();
 
   const username = user?.username || '';
-  const userBoards = getBoardsForUser(username);
+  const [userBoards, setUserBoards] = useState([]);
+  const [boardsLoaded, setBoardsLoaded] = useState(false);
   const [boardId, setBoardId] = useState(null);
   const [showBoardPicker, setShowBoardPicker] = useState(false);
   const currentBoard = userBoards.find(b => b.id === boardId) || userBoards[0];
 
-  // Resolve boardId once auth is ready (useState initializer runs too early)
+  // Load boards from server once auth is ready
   useEffect(() => {
-    if (!authorized) return;
-    const hashId = getBoardId();
-    if (hashId) {
-      const hasAccess = userBoards.some(b => b.id === hashId);
-      setBoardId(hasAccess ? hashId : (userBoards[0]?.id || null));
-    } else {
-      // No hash → go to first board if user has exactly one, else show dashboard
-      setBoardId(userBoards.length === 1 ? userBoards[0].id : null);
-    }
-  }, [authorized]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!authorized || !authToken) return;
+    fetch(`${SERVER_URL}/api/boards`, {
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    })
+      .then(r => r.json())
+      .then(boards => {
+        if (Array.isArray(boards)) {
+          setUserBoards(boards);
+          const hashId = getBoardId();
+          if (hashId && boards.some(b => b.id === hashId)) {
+            setBoardId(hashId);
+          } else if (boards.length === 1) {
+            setBoardId(boards[0].id);
+          }
+          // else: null → dashboard
+        }
+        setBoardsLoaded(true);
+      })
+      .catch(() => setBoardsLoaded(true));
+  }, [authorized, authToken]);
 
   // Sync hash only when we have a valid board
   useEffect(() => {
@@ -819,7 +949,7 @@ export default function App() {
   /* ================================================================
      Render
      ================================================================ */
-  if (loading) {
+  if (loading || (authorized && !boardsLoaded)) {
     return <div className="auth-gate"><p>Loading...</p></div>;
   }
   if (!authorized) {
@@ -888,6 +1018,11 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Members panel (owner only) */}
+      {currentBoard?.role === 'owner' && (
+        <MembersPanel boardId={boardId} authToken={authToken} />
+      )}
 
       {/* Toolbar */}
       <div className="toolbar">

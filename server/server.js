@@ -15,34 +15,34 @@ const BOT_TOKEN = process.env.BOT_TOKEN || '8354275871:AAEfOWq8BK_MbVrFjFqspewji
 const AUTH_SECRET = crypto.createHash('sha256').update('whiteboard-auth:' + BOT_TOKEN).digest();
 // Secret the bot must send to call /api/auth/confirm
 const BOT_API_SECRET = process.env.BOT_API_SECRET || crypto.createHash('sha256').update('bot-api:' + BOT_TOKEN).digest('hex');
-const ALLOWED_USERS = new Set([
-  'huricane1',
-  'Integral_girl',
-  'ttrhach',
-  'karbonari',
-  'Divan0911',
-  'szbuc',
-  'grixylaa',
-  'faccc1less',
-  'Stlr21Bm',
-  'Kxmaruthebest',
-  'meyiapir',
-  't3hge',
-  'masofita',
-  'maria_art_psy',
-]);
+// Board access: read from DB (board_members table)
+// Returns true if user has any role (owner/editor/viewer) on the board.
+async function canAccessBoard(username, boardId) {
+  if (!pool || !dbReady) return false;
+  try {
+    const result = await pool.query(
+      'SELECT role FROM board_members WHERE board_id = $1 AND username = $2',
+      [boardId, username]
+    );
+    return result.rows.length > 0;
+  } catch (err) {
+    console.error('canAccessBoard error:', err.message);
+    return false;
+  }
+}
 
-// Board access control (must match frontend BOARDS config)
-const BOARD_ACCESS = {
-  'eortvlz2': ['huricane1', 'masofita', 'Kxmaruthebest', 'meyiapir', 'faccc1less', 'grixylaa'],
-  'huricane_personal': ['huricane1'],
-  'huricane_maria': ['huricane1', 'maria_art_psy'],
-};
-
-function canAccessBoard(username, boardId) {
-  const access = BOARD_ACCESS[boardId];
-  if (!access) return true; // unknown boards are open (auto-created)
-  return access.includes(username);
+// Check if user is owner of a board
+async function isOwner(username, boardId) {
+  if (!pool || !dbReady) return false;
+  try {
+    const result = await pool.query(
+      "SELECT 1 FROM board_members WHERE board_id = $1 AND username = $2 AND role = 'owner'",
+      [boardId, username]
+    );
+    return result.rows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // --- Signed auth tokens (stateless HMAC-SHA256) ---
@@ -96,9 +96,9 @@ function requireAuth(req, res, next) {
 
 // Middleware: requireAuth + check board access for :id param
 function requireBoardAccess(req, res, next) {
-  requireAuth(req, res, () => {
+  requireAuth(req, res, async () => {
     const boardId = req.params.id;
-    if (!canAccessBoard(req.username, boardId)) {
+    if (!(await canAccessBoard(req.username, boardId))) {
       return res.status(403).json({ error: 'Access denied to this board' });
     }
     next();
@@ -209,6 +209,36 @@ async function initDb() {
         created_at  TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    // Board members: who has access to which board and with what role
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS board_members (
+        board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+        username    TEXT NOT NULL,
+        role        TEXT NOT NULL DEFAULT 'editor',
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (board_id, username)
+      );
+    `);
+    // Migrate hardcoded boards → board_members (idempotent)
+    const LEGACY_ACCESS = {
+      'eortvlz2': { owner: 'huricane1', members: ['masofita', 'Kxmaruthebest', 'meyiapir', 'faccc1less', 'grixylaa'] },
+      'huricane_personal': { owner: 'huricane1', members: [] },
+      'huricane_maria': { owner: 'huricane1', members: ['maria_art_psy'] },
+    };
+    for (const [boardId, { owner, members }] of Object.entries(LEGACY_ACCESS)) {
+      await client.query(
+        `INSERT INTO board_members (board_id, username, role) VALUES ($1, $2, 'owner')
+         ON CONFLICT (board_id, username) DO NOTHING`,
+        [boardId, owner]
+      );
+      for (const m of members) {
+        await client.query(
+          `INSERT INTO board_members (board_id, username, role) VALUES ($1, $2, 'editor')
+           ON CONFLICT (board_id, username) DO NOTHING`,
+          [boardId, m]
+        );
+      }
+    }
     dbReady = true;
     console.log('Database tables initialized');
   } finally {
@@ -472,10 +502,6 @@ app.post('/api/auth', (req, res) => {
   const user = validateTelegramData(initData);
   if (!user) return res.status(401).json({ ok: false, error: 'Invalid signature' });
 
-  if (!ALLOWED_USERS.has(user.username)) {
-    return res.status(403).json({ ok: false, error: 'Not in whitelist' });
-  }
-
   const authToken = createAuthToken(user.username);
   res.json({ ok: true, user: { id: user.id, username: user.username, firstName: user.first_name }, authToken });
 });
@@ -562,10 +588,6 @@ app.get('/api/auth/verify/:token', async (req, res) => {
       return res.status(404).json({ error: 'Token not found, not yet confirmed, or expired' });
     }
     const row = result.rows[0];
-    // Add to runtime whitelist so they can use the app immediately
-    if (row.tg_username) {
-      ALLOWED_USERS.add(row.tg_username);
-    }
     // Mark as used (one-time)
     await pool.query("UPDATE auth_tokens SET status = 'used' WHERE token = $1", [token]);
     const authToken = row.tg_username ? createAuthToken(row.tg_username) : null;
@@ -613,10 +635,15 @@ app.get('/api/auth/status/:token', async (req, res) => {
   }
 });
 
-app.get('/api/boards', requireAuth, async (_req, res) => {
+app.get('/api/boards', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, created_at, updated_at FROM boards ORDER BY updated_at DESC'
+      `SELECT b.id, b.name, b.created_at, b.updated_at, bm.role
+       FROM boards b
+       JOIN board_members bm ON b.id = bm.board_id
+       WHERE bm.username = $1
+       ORDER BY b.updated_at DESC`,
+      [req.username]
     );
     res.json(result.rows);
   } catch (err) {
@@ -629,15 +656,13 @@ app.post('/api/boards', requireAuth, async (req, res) => {
   const id = generateId();
   const name = req.body?.name || 'Untitled';
   try {
+    await pool.query('INSERT INTO boards (id, name) VALUES ($1, $2)', [id, name]);
+    await pool.query('INSERT INTO board_state (board_id) VALUES ($1)', [id]);
     await pool.query(
-      'INSERT INTO boards (id, name) VALUES ($1, $2)',
-      [id, name]
+      "INSERT INTO board_members (board_id, username, role) VALUES ($1, $2, 'owner')",
+      [id, req.username]
     );
-    await pool.query(
-      'INSERT INTO board_state (board_id) VALUES ($1)',
-      [id]
-    );
-    res.status(201).json({ id, name });
+    res.status(201).json({ id, name, role: 'owner' });
   } catch (err) {
     console.error('Failed to create board:', err.message);
     res.status(500).json({ error: 'Failed to create board' });
@@ -779,6 +804,69 @@ app.get('/api/boards/:id/graph', requireBoardAccess, async (req, res) => {
   }
 });
 
+/* ================================================================
+   Board members API — invite, list, remove (owner-only)
+   ================================================================ */
+
+// List members of a board (any member can see)
+app.get('/api/boards/:id/members', requireBoardAccess, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT username, role, created_at FROM board_members WHERE board_id = $1 ORDER BY created_at',
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Invite a user to a board (owner-only)
+app.post('/api/boards/:id/invite', requireBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  if (!(await isOwner(req.username, boardId))) {
+    return res.status(403).json({ error: 'Only the board owner can invite' });
+  }
+  const { username, role } = req.body;
+  if (!username) return res.status(400).json({ error: 'username required' });
+  const validRole = (role === 'editor' || role === 'viewer') ? role : 'editor';
+  try {
+    // Don't overwrite owner role — prevents accidental demotion
+    await pool.query(
+      `INSERT INTO board_members (board_id, username, role) VALUES ($1, $2, $3)
+       ON CONFLICT (board_id, username) DO UPDATE SET role = $3
+       WHERE board_members.role != 'owner'`,
+      [boardId, username, validRole]
+    );
+    console.log(`Invited ${username} as ${validRole} to board ${boardId} by ${req.username}`);
+    res.json({ ok: true, username, role: validRole });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove a member from a board (owner-only, can't remove self)
+app.delete('/api/boards/:id/members/:username', requireBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  const targetUsername = req.params.username;
+  if (!(await isOwner(req.username, boardId))) {
+    return res.status(403).json({ error: 'Only the board owner can remove members' });
+  }
+  if (targetUsername === req.username) {
+    return res.status(400).json({ error: 'Cannot remove yourself' });
+  }
+  try {
+    await pool.query(
+      'DELETE FROM board_members WHERE board_id = $1 AND username = $2',
+      [boardId, targetUsername]
+    );
+    console.log(`Removed ${targetUsername} from board ${boardId} by ${req.username}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- HTTP + WebSocket server ---
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -810,7 +898,7 @@ wss.on('connection', async (ws, request) => {
     ws.close(4001, 'Authentication required');
     return;
   }
-  if (!canAccessBoard(wsUsername, boardId)) {
+  if (!(await canAccessBoard(wsUsername, boardId))) {
     console.log(`[${boardId}] Access denied for ${wsUsername}`);
     ws.close(4003, 'Access denied');
     return;
