@@ -20,7 +20,7 @@ function useMobile() {
 /* ================================================================
    Constants
    ================================================================ */
-function storageKey(boardId) { return `whiteboard-data-${boardId}`; }
+function storageKey(boardId) { return `catego-data-${boardId}`; }
 const SAVE_DEBOUNCE = 500;
 const MAX_HISTORY = 50;
 const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
@@ -82,7 +82,7 @@ function defaultState() {
   const id = genId();
   return {
     nodes: {
-      [id]: { id, x: 200, y: 200, text: 'Welcome to your whiteboard!', color: '#6c8cff', width: 220 },
+      [id]: { id, x: 200, y: 200, text: 'Welcome to Catego!', color: '#6c8cff', width: 220 },
     },
     arrows: {},
     strokes: [],
@@ -273,8 +273,8 @@ function Dashboard({ username, authToken, userBoards, onBoardCreated, onSelectBo
   }
 
   function handleLogout() {
-    localStorage.removeItem('whiteboard-user');
-    localStorage.removeItem('whiteboard-auth-token');
+    localStorage.removeItem('catego-user');
+    localStorage.removeItem('catego-auth-token');
     window.location.reload();
   }
 
@@ -284,7 +284,7 @@ function Dashboard({ username, authToken, userBoards, onBoardCreated, onSelectBo
       justifyContent: 'center', height: '100vh', background: '#1a1a2e',
       color: '#e0e0e0', fontFamily: 'system-ui, sans-serif', gap: '1.5rem',
     }}>
-      <div style={{ fontSize: '2rem', fontWeight: 700 }}>Whiteboard</div>
+      <div style={{ fontSize: '2rem', fontWeight: 700 }}>Catego</div>
       <div style={{ color: '#888' }}>Welcome, {username}</div>
 
       {userBoards.length > 0 && (
@@ -959,7 +959,7 @@ export default function App() {
     }
     return (
       <div className="auth-gate">
-        <p>{error || 'Open this whiteboard from Telegram'}</p>
+        <p>{error || 'Open Catego from Telegram'}</p>
       </div>
     );
   }

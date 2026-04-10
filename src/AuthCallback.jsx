@@ -22,9 +22,9 @@ export default function AuthCallback({ token }) {
       .then((data) => {
         if (data.ok && data.user) {
           // Save user + signed auth token to localStorage
-          localStorage.setItem('whiteboard-user', JSON.stringify(data.user));
+          localStorage.setItem('catego-user', JSON.stringify(data.user));
           if (data.authToken) {
-            localStorage.setItem('whiteboard-auth-token', data.authToken);
+            localStorage.setItem('catego-auth-token', data.authToken);
           }
           setStatus('success');
           // Redirect to main app after a brief moment
@@ -62,7 +62,7 @@ export default function AuthCallback({ token }) {
       {status === 'success' && (
         <>
           <div style={{ fontSize: '2rem', marginBottom: '1rem', color: '#69db7c' }}>Logged in!</div>
-          <div style={{ color: '#888' }}>Redirecting to whiteboard...</div>
+          <div style={{ color: '#888' }}>Redirecting to Catego...</div>
         </>
       )}
       {status === 'error' && (
@@ -79,7 +79,7 @@ export default function AuthCallback({ token }) {
               textDecoration: 'none',
             }}
           >
-            Back to whiteboard
+            Back to Catego
           </a>
         </>
       )}

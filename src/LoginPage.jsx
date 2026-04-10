@@ -84,9 +84,9 @@ export default function LoginPage() {
       fontFamily: 'system-ui, sans-serif',
       gap: '1.5rem',
     }}>
-      <div style={{ fontSize: '2.5rem', fontWeight: 700 }}>Whiteboard</div>
+      <div style={{ fontSize: '2.5rem', fontWeight: 700 }}>Catego</div>
       <div style={{ color: '#888', maxWidth: '300px', textAlign: 'center' }}>
-        Collaborative whiteboard for your group
+        Collaborative boards for your group
       </div>
 
       {state === 'idle' && (

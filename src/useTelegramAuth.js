@@ -22,8 +22,8 @@ export default function useTelegramAuth() {
 
     // Check 1: localStorage (web login via Telegram bot magic link or previous Mini App session)
     try {
-      const saved = localStorage.getItem('whiteboard-user');
-      const savedToken = localStorage.getItem('whiteboard-auth-token');
+      const saved = localStorage.getItem('catego-user');
+      const savedToken = localStorage.getItem('catego-auth-token');
       if (saved && savedToken) {
         const user = JSON.parse(saved);
         if (user && user.username) {
@@ -55,9 +55,9 @@ export default function useTelegramAuth() {
       .then((res) => res.json())
       .then((data) => {
         if (data.ok) {
-          localStorage.setItem('whiteboard-user', JSON.stringify(data.user));
+          localStorage.setItem('catego-user', JSON.stringify(data.user));
           if (data.authToken) {
-            localStorage.setItem('whiteboard-auth-token', data.authToken);
+            localStorage.setItem('catego-auth-token', data.authToken);
           }
           setState({ authorized: true, loading: false, user: data.user, error: null, authToken: data.authToken || null });
         } else {

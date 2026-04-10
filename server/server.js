@@ -12,7 +12,7 @@ const url = require('url');
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '8354275871:AAEfOWq8BK_MbVrFjFqspewji3d9tmxNp24';
 // Secret for signing auth tokens (derived from BOT_TOKEN so no extra env var needed)
-const AUTH_SECRET = crypto.createHash('sha256').update('whiteboard-auth:' + BOT_TOKEN).digest();
+const AUTH_SECRET = crypto.createHash('sha256').update('catego-auth:' + BOT_TOKEN).digest();
 // Secret the bot must send to call /api/auth/confirm
 const BOT_API_SECRET = process.env.BOT_API_SECRET || crypto.createHash('sha256').update('bot-api:' + BOT_TOKEN).digest('hex');
 // Board access: read from DB (board_members table)
@@ -1041,13 +1041,13 @@ process.on('SIGINT', shutdown);
 initDb()
   .then(() => {
     server.listen(PORT, () => {
-      console.log(`Whiteboard server running on port ${PORT}`);
+      console.log(`Catego server running on port ${PORT}`);
     });
   })
   .catch((err) => {
     console.error('Database init failed (will start without persistence):', err.message);
     // Start anyway — boards work in-memory
     server.listen(PORT, () => {
-      console.log(`Whiteboard server running on port ${PORT} (no DB)`);
+      console.log(`Catego server running on port ${PORT} (no DB)`);
     });
   });

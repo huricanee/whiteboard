@@ -1,7 +1,7 @@
 {
-  "name": "whiteboard-server",
+  "name": "catego-server",
   "version": "1.0.0",
-  "description": "Collaborative whiteboard WebSocket server",
+  "description": "Catego — collaborative board server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
