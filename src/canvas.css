@@ -386,10 +386,6 @@
   stroke-width: 4;
 }
 
-.canvas-root.overview .arrow-marker {
-  transform: scale(1.6);
-}
-
 /* ============================================================
    Freehand drawing layer (SVG strokes)
    ============================================================ */

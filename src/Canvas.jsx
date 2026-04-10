@@ -1508,6 +1508,7 @@ export default function Canvas({
   const gridSize = GRID_SIZE * zoom;
 
   /* ---- Render arrows (SVG) ---- */
+  const arrowSize = zoom < 0.4 ? 16 : 10; // bigger arrowheads at overview zoom
   const arrowElements = [];
   for (const aId of Object.keys(arrows)) {
     const arrow = arrows[aId];
@@ -1540,7 +1541,7 @@ export default function Canvas({
           onDoubleClick={(e) => onArrowDoubleClick(e, aId)}
         />
         <polygon
-          points={arrowheadPoints(to.x, to.y, cp2x, cp2y, 10)}
+          points={arrowheadPoints(to.x, to.y, cp2x, cp2y, arrowSize)}
           className="arrow-marker"
           style={{ color }}
           fill={color}
