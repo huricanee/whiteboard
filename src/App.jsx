@@ -231,14 +231,22 @@ export default function App() {
 
   const username = user?.username || '';
   const userBoards = getBoardsForUser(username);
-  const [boardId, setBoardId] = useState(() => {
-    const id = getBoardId();
-    if (!id) return userBoards[0]?.id || null;
-    const hasAccess = userBoards.some(b => b.id === id);
-    return hasAccess ? id : (userBoards[0]?.id || null);
-  });
+  const [boardId, setBoardId] = useState(null);
   const [showBoardPicker, setShowBoardPicker] = useState(false);
   const currentBoard = userBoards.find(b => b.id === boardId) || userBoards[0];
+
+  // Resolve boardId once auth is ready (useState initializer runs too early)
+  useEffect(() => {
+    if (!authorized) return;
+    const hashId = getBoardId();
+    if (hashId) {
+      const hasAccess = userBoards.some(b => b.id === hashId);
+      setBoardId(hasAccess ? hashId : (userBoards[0]?.id || null));
+    } else {
+      // No hash → go to first board if user has exactly one, else show dashboard
+      setBoardId(userBoards.length === 1 ? userBoards[0].id : null);
+    }
+  }, [authorized]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync hash only when we have a valid board
   useEffect(() => {
