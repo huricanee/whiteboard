@@ -39,7 +39,7 @@ function getBoardsForUser(username) {
 function getBoardId() {
   const hash = window.location.hash.slice(1);
   if (hash && hash.length >= 4) return hash;
-  return BOARDS[0].id;
+  return null; // no default — let the app decide after auth
 }
 const PALETTE = [
   '#6c8cff', '#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#38d9a9',
@@ -120,6 +120,109 @@ function applySnapshot(state, snapshot) {
 }
 
 /* ================================================================
+   Dashboard — shown when user has no board selected or no boards
+   ================================================================ */
+function Dashboard({ username, authToken, userBoards, onBoardCreated, onSelectBoard }) {
+  const [creating, setCreating] = useState(false);
+  const [boardName, setBoardName] = useState('');
+  const [error, setError] = useState(null);
+
+  async function handleCreate() {
+    const name = boardName.trim() || 'My Board';
+    setCreating(true);
+    setError(null);
+    try {
+      const res = await fetch(`${SERVER_URL}/api/boards`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (data.id) {
+        onBoardCreated(data.id);
+      } else {
+        setError(data.error || 'Failed to create board');
+        setCreating(false);
+      }
+    } catch (err) {
+      setError(err.message);
+      setCreating(false);
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('whiteboard-user');
+    localStorage.removeItem('whiteboard-auth-token');
+    window.location.reload();
+  }
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', height: '100vh', background: '#1a1a2e',
+      color: '#e0e0e0', fontFamily: 'system-ui, sans-serif', gap: '1.5rem',
+    }}>
+      <div style={{ fontSize: '2rem', fontWeight: 700 }}>Whiteboard</div>
+      <div style={{ color: '#888' }}>Welcome, {username}</div>
+
+      {userBoards.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '280px' }}>
+          <div style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '0.25rem' }}>Your boards:</div>
+          {userBoards.map(b => (
+            <button key={b.id} onClick={() => onSelectBoard(b.id)} style={{
+              padding: '0.75rem 1rem', background: '#2a2a4a', color: '#e0e0e0',
+              border: '1px solid #3a3a5a', borderRadius: '8px', cursor: 'pointer',
+              textAlign: 'left', fontSize: '1rem',
+            }}>
+              {b.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '280px', marginTop: '1rem' }}>
+        <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Create new board:</div>
+        <input
+          type="text"
+          placeholder="Board name"
+          value={boardName}
+          onChange={e => setBoardName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleCreate()}
+          style={{
+            padding: '0.75rem', background: '#2a2a4a', color: '#e0e0e0',
+            border: '1px solid #3a3a5a', borderRadius: '8px', fontSize: '1rem',
+            outline: 'none',
+          }}
+        />
+        <button
+          onClick={handleCreate}
+          disabled={creating}
+          style={{
+            padding: '0.75rem', background: '#6c8cff', color: 'white',
+            border: 'none', borderRadius: '8px', cursor: 'pointer',
+            fontSize: '1rem', fontWeight: 600, opacity: creating ? 0.6 : 1,
+          }}
+        >
+          {creating ? 'Creating...' : 'Create Board'}
+        </button>
+        {error && <div style={{ color: '#ff6b6b', fontSize: '0.85rem' }}>{error}</div>}
+      </div>
+
+      <button onClick={handleLogout} style={{
+        marginTop: '2rem', padding: '0.5rem 1rem', background: 'transparent',
+        color: '#666', border: '1px solid #333', borderRadius: '6px',
+        cursor: 'pointer', fontSize: '0.85rem',
+      }}>
+        Log out
+      </button>
+    </div>
+  );
+}
+
+/* ================================================================
    APP COMPONENT
    ================================================================ */
 export default function App() {
@@ -130,14 +233,17 @@ export default function App() {
   const userBoards = getBoardsForUser(username);
   const [boardId, setBoardId] = useState(() => {
     const id = getBoardId();
-    // If user has no access to this board, redirect to their first available board
+    if (!id) return userBoards[0]?.id || null;
     const hasAccess = userBoards.some(b => b.id === id);
-    const finalId = hasAccess ? id : (userBoards[0]?.id || id);
-    window.location.hash = finalId;
-    return finalId;
+    return hasAccess ? id : (userBoards[0]?.id || null);
   });
   const [showBoardPicker, setShowBoardPicker] = useState(false);
   const currentBoard = userBoards.find(b => b.id === boardId) || userBoards[0];
+
+  // Sync hash only when we have a valid board
+  useEffect(() => {
+    if (boardId) window.location.hash = boardId;
+  }, [boardId]);
 
   const switchBoard = useCallback((newId) => {
     window.location.hash = newId;
@@ -147,7 +253,7 @@ export default function App() {
     window.location.reload();
   }, []);
 
-  const [state, setState] = useState(() => loadState(getBoardId()) || defaultState());
+  const [state, setState] = useState(() => (boardId && loadState(boardId)) || defaultState());
   const [selectedId, setSelectedId] = useState(null);
   const [selectedType, setSelectedType] = useState(null); // 'node' | 'arrow' | null
 
@@ -168,7 +274,7 @@ export default function App() {
   const [selection, setSelection] = useState({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
 
   // Undo/Redo history
-  const [history, setHistory] = useState(() => [takeSnapshot(loadState(getBoardId()) || defaultState())]);
+  const [history, setHistory] = useState(() => [takeSnapshot((boardId && loadState(boardId)) || defaultState())]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const historyLock = useRef(false); // prevent pushing history during undo/redo
 
@@ -720,36 +826,60 @@ export default function App() {
     );
   }
 
+  // Dashboard: no boards yet — show create board UI
+  if (!boardId) {
+    return (
+      <Dashboard
+        username={username}
+        authToken={authToken}
+        userBoards={userBoards}
+        onBoardCreated={(newId) => {
+          window.location.hash = newId;
+          window.location.reload();
+        }}
+        onSelectBoard={(id) => {
+          window.location.hash = id;
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
   return (
     <>
-      {/* Board picker — only shown if user has multiple boards */}
-      {userBoards.length > 1 && (
-        <div className="board-picker-container">
-          <button className="board-picker-btn" onClick={() => setShowBoardPicker(p => !p)}>
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-            {currentBoard?.name || 'Board'}
-          </button>
-          {showBoardPicker && (
-            <div className="board-picker-dropdown">
-              {userBoards.map(b => (
-                <button
-                  key={b.id}
-                  className={`board-picker-item${b.id === boardId ? ' active' : ''}`}
-                  onClick={() => switchBoard(b.id)}
-                >
-                  {b.name}
-                  {b.id === boardId && <span className="board-picker-check">✓</span>}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Board picker */}
+      <div className="board-picker-container">
+        <button className="board-picker-btn" onClick={() => setShowBoardPicker(p => !p)}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+          {currentBoard?.name || 'Board'}
+        </button>
+        {showBoardPicker && (
+          <div className="board-picker-dropdown">
+            {userBoards.map(b => (
+              <button
+                key={b.id}
+                className={`board-picker-item${b.id === boardId ? ' active' : ''}`}
+                onClick={() => switchBoard(b.id)}
+              >
+                {b.name}
+                {b.id === boardId && <span className="board-picker-check">✓</span>}
+              </button>
+            ))}
+            <button
+              className="board-picker-item"
+              onClick={() => { window.location.hash = ''; window.location.reload(); }}
+              style={{ borderTop: '1px solid #3a3a5a', color: '#6c8cff' }}
+            >
+              + New board / Dashboard
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Toolbar */}
       <div className="toolbar">
