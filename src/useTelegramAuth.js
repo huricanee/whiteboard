@@ -1,28 +1,33 @@
 /**
- * useTelegramAuth — Telegram Mini App authentication hook.
+ * useTelegramAuth — authentication hook.
  *
- * Checks if running inside Telegram WebApp, validates initData with the server,
- * and returns auth state.
+ * Supports two auth flows:
+ * 1. Telegram Mini App: validates initData with server, gets signed authToken
+ * 2. Web login: reads saved authToken from localStorage (set by magic link or Mini App flow)
+ *
+ * Returns { authorized, loading, user, error, authToken }.
+ * authToken is an HMAC-signed token that must be sent with all API requests.
  */
 import { useState, useEffect, useRef } from 'react';
 
 const SERVER_URL = 'https://whiteboard-production-ec19.up.railway.app';
 
 export default function useTelegramAuth() {
-  const [state, setState] = useState({ authorized: false, loading: true, user: null, error: null });
+  const [state, setState] = useState({ authorized: false, loading: true, user: null, error: null, authToken: null });
   const ran = useRef(false);
 
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
 
-    // Check 1: localStorage (web login via Telegram bot magic link)
+    // Check 1: localStorage (web login via Telegram bot magic link or previous Mini App session)
     try {
       const saved = localStorage.getItem('whiteboard-user');
-      if (saved) {
+      const savedToken = localStorage.getItem('whiteboard-auth-token');
+      if (saved && savedToken) {
         const user = JSON.parse(saved);
         if (user && user.username) {
-          setState({ authorized: true, loading: false, user, error: null });
+          setState({ authorized: true, loading: false, user, error: null, authToken: savedToken });
           return;
         }
       }
@@ -35,7 +40,7 @@ export default function useTelegramAuth() {
     const initData = tg?.initData;
     if (!tg || !initData) {
       // Not in Telegram and not logged in via web → show login page
-      setState({ authorized: false, loading: false, user: null, error: 'not_authenticated' });
+      setState({ authorized: false, loading: false, user: null, error: 'not_authenticated', authToken: null });
       return;
     }
 
@@ -50,17 +55,19 @@ export default function useTelegramAuth() {
       .then((res) => res.json())
       .then((data) => {
         if (data.ok) {
-          // Also save to localStorage so web login works on refresh
           localStorage.setItem('whiteboard-user', JSON.stringify(data.user));
-          setState({ authorized: true, loading: false, user: data.user, error: null });
+          if (data.authToken) {
+            localStorage.setItem('whiteboard-auth-token', data.authToken);
+          }
+          setState({ authorized: true, loading: false, user: data.user, error: null, authToken: data.authToken || null });
         } else {
-          setState({ authorized: false, loading: false, user: null, error: data.error || 'Auth failed' });
+          setState({ authorized: false, loading: false, user: null, error: data.error || 'Auth failed', authToken: null });
         }
       })
       .catch((err) => {
-        setState({ authorized: false, loading: false, user: null, error: err.message || 'Network error' });
+        setState({ authorized: false, loading: false, user: null, error: err.message || 'Network error', authToken: null });
       });
   }, []);
 
-  return { ...state, initData: window.Telegram?.WebApp?.initData || null };
+  return state;
 }

@@ -11,6 +11,10 @@ const url = require('url');
 // --- Config ---
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '8354275871:AAEfOWq8BK_MbVrFjFqspewji3d9tmxNp24';
+// Secret for signing auth tokens (derived from BOT_TOKEN so no extra env var needed)
+const AUTH_SECRET = crypto.createHash('sha256').update('whiteboard-auth:' + BOT_TOKEN).digest();
+// Secret the bot must send to call /api/auth/confirm
+const BOT_API_SECRET = process.env.BOT_API_SECRET || crypto.createHash('sha256').update('bot-api:' + BOT_TOKEN).digest('hex');
 const ALLOWED_USERS = new Set([
   'huricane1',
   'Integral_girl',
@@ -39,6 +43,66 @@ function canAccessBoard(username, boardId) {
   const access = BOARD_ACCESS[boardId];
   if (!access) return true; // unknown boards are open (auto-created)
   return access.includes(username);
+}
+
+// --- Signed auth tokens (stateless HMAC-SHA256) ---
+// Format: base64url(username:expiryEpochMs:hmac)
+const AUTH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function createAuthToken(username) {
+  const expiry = Date.now() + AUTH_TOKEN_TTL_MS;
+  const payload = `${username}:${expiry}`;
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  return Buffer.from(`${payload}:${sig}`).toString('base64url');
+}
+
+function verifyAuthToken(token) {
+  try {
+    const decoded = Buffer.from(token, 'base64url').toString();
+    const parts = decoded.split(':');
+    if (parts.length !== 3) return null;
+    const [username, expiryStr, sig] = parts;
+    const expiry = parseInt(expiryStr, 10);
+    if (Date.now() > expiry) return null; // expired
+    const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`${username}:${expiryStr}`).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
+    return username;
+  } catch {
+    return null;
+  }
+}
+
+// Express middleware: extracts username from Authorization header or ?token= query param.
+// Sets req.username on success, returns 401 on failure.
+function requireAuth(req, res, next) {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7);
+  }
+  if (!token) {
+    token = req.query.auth;
+  }
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const username = verifyAuthToken(token);
+  if (!username) {
+    return res.status(401).json({ error: 'Invalid or expired auth token' });
+  }
+  req.username = username;
+  next();
+}
+
+// Middleware: requireAuth + check board access for :id param
+function requireBoardAccess(req, res, next) {
+  requireAuth(req, res, () => {
+    const boardId = req.params.id;
+    if (!canAccessBoard(req.username, boardId)) {
+      return res.status(403).json({ error: 'Access denied to this board' });
+    }
+    next();
+  });
 }
 
 // --- Telegram auth validation ---
@@ -412,7 +476,8 @@ app.post('/api/auth', (req, res) => {
     return res.status(403).json({ ok: false, error: 'Not in whitelist' });
   }
 
-  res.json({ ok: true, user: { id: user.id, username: user.username, firstName: user.first_name } });
+  const authToken = createAuthToken(user.username);
+  res.json({ ok: true, user: { id: user.id, username: user.username, firstName: user.first_name }, authToken });
 });
 
 /* ================================================================
@@ -442,9 +507,14 @@ app.post('/api/auth/init', async (_req, res) => {
 });
 
 // Step 2: Bot calls this after user sends /start auth_TOKEN
-// Bot passes the token + Telegram user info
+// Protected by shared secret — only the bot should call this.
 app.post('/api/auth/confirm', async (req, res) => {
   if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  // Verify bot API secret
+  const secret = req.headers['x-bot-secret'];
+  if (!secret || secret !== BOT_API_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { token, tg_user_id, tg_username, first_name } = req.body;
   if (!token || !tg_user_id) {
     return res.status(400).json({ error: 'Missing token or tg_user_id' });
@@ -498,6 +568,7 @@ app.get('/api/auth/verify/:token', async (req, res) => {
     }
     // Mark as used (one-time)
     await pool.query("UPDATE auth_tokens SET status = 'used' WHERE token = $1", [token]);
+    const authToken = row.tg_username ? createAuthToken(row.tg_username) : null;
     res.json({
       ok: true,
       user: {
@@ -505,6 +576,7 @@ app.get('/api/auth/verify/:token', async (req, res) => {
         username: row.tg_username,
         firstName: row.first_name,
       },
+      authToken,
     });
   } catch (err) {
     console.error('auth/verify failed:', err.message);
@@ -541,7 +613,7 @@ app.get('/api/auth/status/:token', async (req, res) => {
   }
 });
 
-app.get('/api/boards', async (_req, res) => {
+app.get('/api/boards', requireAuth, async (_req, res) => {
   try {
     const result = await pool.query(
       'SELECT id, name, created_at, updated_at FROM boards ORDER BY updated_at DESC'
@@ -553,7 +625,7 @@ app.get('/api/boards', async (_req, res) => {
   }
 });
 
-app.post('/api/boards', async (req, res) => {
+app.post('/api/boards', requireAuth, async (req, res) => {
   const id = generateId();
   const name = req.body?.name || 'Untitled';
   try {
@@ -572,7 +644,7 @@ app.post('/api/boards', async (req, res) => {
   }
 });
 
-app.get('/api/boards/:id', async (req, res) => {
+app.get('/api/boards/:id', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   try {
     const boardResult = await pool.query(
@@ -601,7 +673,7 @@ app.get('/api/boards/:id', async (req, res) => {
    ================================================================ */
 
 // List snapshots for a board
-app.get('/api/boards/:id/snapshots', async (req, res) => {
+app.get('/api/boards/:id/snapshots', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   if (!pool || !dbReady) return res.json([]);
   try {
@@ -617,7 +689,7 @@ app.get('/api/boards/:id/snapshots', async (req, res) => {
 });
 
 // Restore a snapshot
-app.post('/api/boards/:id/snapshots/:snapshotId/restore', async (req, res) => {
+app.post('/api/boards/:id/snapshots/:snapshotId/restore', requireBoardAccess, async (req, res) => {
   const { id, snapshotId } = req.params;
   if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
   try {
@@ -656,7 +728,7 @@ app.post('/api/boards/:id/snapshots/:snapshotId/restore', async (req, res) => {
    ================================================================ */
 
 // Search nodes by text (case-insensitive substring match)
-app.get('/api/boards/:id/search', async (req, res) => {
+app.get('/api/boards/:id/search', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   const q = (req.query.q || '').toLowerCase();
   if (!q) return res.json([]);
@@ -672,7 +744,7 @@ app.get('/api/boards/:id/search', async (req, res) => {
 });
 
 // Get N most recently added nodes (by ID sort — IDs are time-based)
-app.get('/api/boards/:id/recent', async (req, res) => {
+app.get('/api/boards/:id/recent', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   try {
@@ -688,7 +760,7 @@ app.get('/api/boards/:id/recent', async (req, res) => {
 });
 
 // Compact graph: node names + connections (no coordinates, no strokes)
-app.get('/api/boards/:id/graph', async (req, res) => {
+app.get('/api/boards/:id/graph', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   try {
     const state = await loadBoardState(id);
@@ -729,10 +801,16 @@ wss.on('connection', async (ws, request) => {
   const userId = generateId();
   const color = randomColor();
 
-  // Check board access control
+  // Authenticate via signed token in ?auth= query param
   const params = new URLSearchParams(url.parse(request.url).query || '');
-  const wsUsername = params.get('user');
-  if (wsUsername && !canAccessBoard(wsUsername, boardId)) {
+  const authToken = params.get('auth');
+  const wsUsername = authToken ? verifyAuthToken(authToken) : null;
+  if (!wsUsername) {
+    console.log(`[${boardId}] WebSocket auth failed (no valid token)`);
+    ws.close(4001, 'Authentication required');
+    return;
+  }
+  if (!canAccessBoard(wsUsername, boardId)) {
     console.log(`[${boardId}] Access denied for ${wsUsername}`);
     ws.close(4003, 'Access denied');
     return;

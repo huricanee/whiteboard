@@ -123,7 +123,7 @@ function applySnapshot(state, snapshot) {
    APP COMPONENT
    ================================================================ */
 export default function App() {
-  const { authorized, loading, error, user } = useTelegramAuth();
+  const { authorized, loading, error, user, authToken } = useTelegramAuth();
   const isMobile = useMobile();
 
   const username = user?.username || '';
@@ -249,6 +249,7 @@ export default function App() {
     applyDelta,
     replaceState,
     username,
+    authToken,
   });
 
   /* ================================================================

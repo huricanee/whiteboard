@@ -55,10 +55,8 @@ export default function LoginPage() {
           const statusData = await statusRes.json();
           if (statusData.status === 'confirmed' || statusData.status === 'used') {
             clearInterval(pollRef.current);
-            // Save user to localStorage
-            localStorage.setItem('whiteboard-user', JSON.stringify(statusData.user));
-            // Reload to enter the app
-            window.location.reload();
+            // Redirect to magic link to complete auth (gets signed authToken)
+            window.location.href = `/auth/${data.token}`;
           } else if (statusData.status === 'expired') {
             clearInterval(pollRef.current);
             setState('error');

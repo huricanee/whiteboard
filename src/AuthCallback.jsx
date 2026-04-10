@@ -21,8 +21,11 @@ export default function AuthCallback({ token }) {
       .then((res) => res.json())
       .then((data) => {
         if (data.ok && data.user) {
-          // Save user to localStorage (same key as Telegram Mini App auth)
+          // Save user + signed auth token to localStorage
           localStorage.setItem('whiteboard-user', JSON.stringify(data.user));
+          if (data.authToken) {
+            localStorage.setItem('whiteboard-auth-token', data.authToken);
+          }
           setStatus('success');
           // Redirect to main app after a brief moment
           setTimeout(() => {
