@@ -1708,7 +1708,7 @@ export default function Canvas({
           transform: `translate3d(${panX}px, ${panY}px, 0) scale3d(${zoom}, ${zoom}, 1)`,
         }}
       >
-        <svg className="arrow-layer" width="1" height="1">
+        <svg className="arrow-layer" width="20000" height="20000" viewBox="0 0 20000 20000">
           {arrowElements}
         </svg>
 
