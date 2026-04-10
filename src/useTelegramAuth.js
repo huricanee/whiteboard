@@ -16,9 +16,25 @@ export default function useTelegramAuth() {
     if (ran.current) return;
     ran.current = true;
 
+    // Check 1: localStorage (web login via Telegram bot magic link)
+    try {
+      const saved = localStorage.getItem('whiteboard-user');
+      if (saved) {
+        const user = JSON.parse(saved);
+        if (user && user.username) {
+          setState({ authorized: true, loading: false, user, error: null });
+          return;
+        }
+      }
+    } catch {
+      // Corrupted localStorage, continue to other auth methods
+    }
+
+    // Check 2: Telegram Mini App
     const tg = window.Telegram?.WebApp;
     if (!tg) {
-      setState({ authorized: false, loading: false, user: null, error: 'Open this whiteboard from Telegram' });
+      // Not in Telegram and not logged in via web → show login page
+      setState({ authorized: false, loading: false, user: null, error: 'not_authenticated' });
       return;
     }
 
@@ -39,6 +55,8 @@ export default function useTelegramAuth() {
       .then((res) => res.json())
       .then((data) => {
         if (data.ok) {
+          // Also save to localStorage so web login works on refresh
+          localStorage.setItem('whiteboard-user', JSON.stringify(data.user));
           setState({ authorized: true, loading: false, user: data.user, error: null });
         } else {
           setState({ authorized: false, loading: false, user: null, error: data.error || 'Auth failed' });

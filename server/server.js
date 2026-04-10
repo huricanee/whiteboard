@@ -123,6 +123,28 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_snapshots_board_time
       ON board_snapshots(board_id, created_at DESC);
     `);
+    // Auth tokens for Telegram login flow (site → bot → magic link → logged in)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS auth_tokens (
+        token       TEXT PRIMARY KEY,
+        tg_user_id  BIGINT,
+        tg_username TEXT,
+        first_name  TEXT,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        expires_at  TIMESTAMPTZ NOT NULL
+      );
+    `);
+    // Users table (created on first login)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id          SERIAL PRIMARY KEY,
+        tg_user_id  BIGINT UNIQUE NOT NULL,
+        tg_username TEXT,
+        first_name  TEXT,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
     dbReady = true;
     console.log('Database tables initialized');
   } finally {
@@ -391,6 +413,132 @@ app.post('/api/auth', (req, res) => {
   }
 
   res.json({ ok: true, user: { id: user.id, username: user.username, firstName: user.first_name } });
+});
+
+/* ================================================================
+   Auth: Telegram login flow
+   Site → bot → magic link → logged in
+   ================================================================ */
+
+// Step 1: Site calls this to get a token + deep link to the bot
+app.post('/api/auth/init', async (_req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  const token = generateId(32);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+  try {
+    await pool.query(
+      'INSERT INTO auth_tokens (token, status, expires_at) VALUES ($1, $2, $3)',
+      [token, 'pending', expiresAt]
+    );
+    res.json({
+      token,
+      botLink: `https://t.me/InsanelyRationalBot?start=auth_${token}`,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (err) {
+    console.error('auth/init failed:', err.message);
+    res.status(500).json({ error: 'Failed to create auth token' });
+  }
+});
+
+// Step 2: Bot calls this after user sends /start auth_TOKEN
+// Bot passes the token + Telegram user info
+app.post('/api/auth/confirm', async (req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  const { token, tg_user_id, tg_username, first_name } = req.body;
+  if (!token || !tg_user_id) {
+    return res.status(400).json({ error: 'Missing token or tg_user_id' });
+  }
+  try {
+    // Check token exists and is pending and not expired
+    const result = await pool.query(
+      "SELECT * FROM auth_tokens WHERE token = $1 AND status = 'pending' AND expires_at > NOW()",
+      [token]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Token not found, expired, or already used' });
+    }
+    // Upsert user
+    await pool.query(
+      `INSERT INTO users (tg_user_id, tg_username, first_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tg_user_id) DO UPDATE SET tg_username = $2, first_name = $3`,
+      [tg_user_id, tg_username || null, first_name || null]
+    );
+    // Mark token as confirmed with user info
+    await pool.query(
+      "UPDATE auth_tokens SET status = 'confirmed', tg_user_id = $2, tg_username = $3, first_name = $4 WHERE token = $1",
+      [token, tg_user_id, tg_username || null, first_name || null]
+    );
+    console.log(`Auth confirmed: ${tg_username} (${tg_user_id}) via token ${token.slice(0, 8)}...`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('auth/confirm failed:', err.message);
+    res.status(500).json({ error: 'Failed to confirm auth' });
+  }
+});
+
+// Step 3: Site calls this when user opens the magic link /auth/TOKEN
+// Returns user info if token is confirmed, adds username to ALLOWED_USERS
+app.get('/api/auth/verify/:token', async (req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  const { token } = req.params;
+  try {
+    const result = await pool.query(
+      "SELECT * FROM auth_tokens WHERE token = $1 AND status = 'confirmed' AND expires_at > NOW()",
+      [token]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Token not found, not yet confirmed, or expired' });
+    }
+    const row = result.rows[0];
+    // Add to runtime whitelist so they can use the app immediately
+    if (row.tg_username) {
+      ALLOWED_USERS.add(row.tg_username);
+    }
+    // Mark as used (one-time)
+    await pool.query("UPDATE auth_tokens SET status = 'used' WHERE token = $1", [token]);
+    res.json({
+      ok: true,
+      user: {
+        id: row.tg_user_id,
+        username: row.tg_username,
+        firstName: row.first_name,
+      },
+    });
+  } catch (err) {
+    console.error('auth/verify failed:', err.message);
+    res.status(500).json({ error: 'Failed to verify token' });
+  }
+});
+
+// Polling endpoint: site checks if bot confirmed the token yet
+app.get('/api/auth/status/:token', async (req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  const { token } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT status, tg_username, first_name, tg_user_id, expires_at FROM auth_tokens WHERE token = $1',
+      [token]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+    const row = result.rows[0];
+    if (new Date(row.expires_at) < new Date()) {
+      return res.json({ status: 'expired' });
+    }
+    if (row.status === 'confirmed' || row.status === 'used') {
+      res.json({
+        status: 'confirmed',
+        user: { id: row.tg_user_id, username: row.tg_username, firstName: row.first_name },
+      });
+    } else {
+      res.json({ status: 'pending' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/boards', async (_req, res) => {

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import Canvas from './Canvas.jsx';
 import useSync from './useSync.js';
 import useTelegramAuth from './useTelegramAuth.js';
+import LoginPage from './LoginPage.jsx';
 
 /* ================================================================
    Mobile detection hook
@@ -707,6 +708,10 @@ export default function App() {
     return <div className="auth-gate"><p>Loading...</p></div>;
   }
   if (!authorized) {
+    // Show login page when opened outside Telegram (web browser)
+    if (error === 'not_authenticated') {
+      return <LoginPage />;
+    }
     return (
       <div className="auth-gate">
         <p>{error || 'Open this whiteboard from Telegram'}</p>
