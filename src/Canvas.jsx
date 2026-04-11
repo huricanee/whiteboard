@@ -1706,7 +1706,7 @@ export default function Canvas({
       <div
         className="canvas-grid"
         style={{
-          backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)`,
+          backgroundImage: `radial-gradient(circle at 0 0, rgba(255,255,255,0.07) 1px, transparent 1px)`,
           backgroundSize: `${gridSize}px ${gridSize}px`,
           backgroundPosition: `${panX % gridSize}px ${panY % gridSize}px`,
         }}
