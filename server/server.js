@@ -669,6 +669,24 @@ app.post('/api/boards', requireAuth, async (req, res) => {
   }
 });
 
+// Rename a board (owner-only)
+app.patch('/api/boards/:id', requireBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  if (!(await isOwner(req.username, boardId))) {
+    return res.status(403).json({ error: 'Only the board owner can rename' });
+  }
+  const { name } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Name required' });
+  }
+  try {
+    await pool.query('UPDATE boards SET name = $1, updated_at = NOW() WHERE id = $2', [name.trim(), boardId]);
+    res.json({ ok: true, name: name.trim() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/boards/:id', requireBoardAccess, async (req, res) => {
   const { id } = req.params;
   try {

@@ -111,6 +111,84 @@ function applySnapshot(state, snapshot) {
 }
 
 /* ================================================================
+   Board picker with inline rename
+   ================================================================ */
+function BoardPicker({ boards, boardId, currentBoard, show, onToggle, onSwitch, onDashboard, authToken, onRenamed }) {
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+
+  async function handleRename(id) {
+    const name = editName.trim();
+    if (!name) { setEditingId(null); return; }
+    const res = await fetch(`${SERVER_URL}/api/boards/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      onRenamed(id, data.name);
+    }
+    setEditingId(null);
+  }
+
+  return (
+    <div className="board-picker-container">
+      <button className="board-picker-btn" onClick={onToggle}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+          <rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        {currentBoard?.name || 'Board'}
+      </button>
+      {show && (
+        <div className="board-picker-dropdown">
+          {boards.map(b => (
+            <div key={b.id} className={`board-picker-item${b.id === boardId ? ' active' : ''}`}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              {editingId === b.id ? (
+                <input
+                  autoFocus
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleRename(b.id); if (e.key === 'Escape') setEditingId(null); }}
+                  onBlur={() => handleRename(b.id)}
+                  style={{
+                    flex: 1, padding: '2px 4px', background: '#1a1a2e', color: '#e0e0e0',
+                    border: '1px solid #6c8cff', borderRadius: '4px', fontSize: '0.85rem', outline: 'none',
+                  }}
+                  onClick={e => e.stopPropagation()}
+                />
+              ) : (
+                <>
+                  <span style={{ flex: 1, cursor: 'pointer' }} onClick={() => onSwitch(b.id)}>
+                    {b.name}
+                  </span>
+                  {b.role === 'owner' && (
+                    <button onClick={(e) => { e.stopPropagation(); setEditingId(b.id); setEditName(b.name); }}
+                      style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '0.75rem', padding: '2px 4px' }}
+                      title="Rename">
+                      ✎
+                    </button>
+                  )}
+                  {b.id === boardId && <span className="board-picker-check">✓</span>}
+                </>
+              )}
+            </div>
+          ))}
+          <button className="board-picker-item" onClick={onDashboard}
+            style={{ borderTop: '1px solid #3a3a5a', color: '#6c8cff' }}>
+            + New board / Dashboard
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
    Members panel — shown as overlay for board owners
    ================================================================ */
 function MembersPanel({ boardId, authToken }) {
@@ -999,38 +1077,17 @@ export default function App() {
   return (
     <>
       {/* Board picker */}
-      <div className="board-picker-container">
-        <button className="board-picker-btn" onClick={() => setShowBoardPicker(p => !p)}>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-          {currentBoard?.name || 'Board'}
-        </button>
-        {showBoardPicker && (
-          <div className="board-picker-dropdown">
-            {userBoards.map(b => (
-              <button
-                key={b.id}
-                className={`board-picker-item${b.id === boardId ? ' active' : ''}`}
-                onClick={() => switchBoard(b.id)}
-              >
-                {b.name}
-                {b.id === boardId && <span className="board-picker-check">✓</span>}
-              </button>
-            ))}
-            <button
-              className="board-picker-item"
-              onClick={() => { window.location.hash = ''; window.location.reload(); }}
-              style={{ borderTop: '1px solid #3a3a5a', color: '#6c8cff' }}
-            >
-              + New board / Dashboard
-            </button>
-          </div>
-        )}
-      </div>
+      <BoardPicker
+        boards={userBoards}
+        boardId={boardId}
+        currentBoard={currentBoard}
+        show={showBoardPicker}
+        onToggle={() => setShowBoardPicker(p => !p)}
+        onSwitch={switchBoard}
+        onDashboard={() => { window.location.hash = ''; window.location.reload(); }}
+        authToken={authToken}
+        onRenamed={(id, newName) => setUserBoards(prev => prev.map(b => b.id === id ? { ...b, name: newName } : b))}
+      />
 
       {/* Members panel (owner only) */}
       {currentBoard?.role === 'owner' && (
