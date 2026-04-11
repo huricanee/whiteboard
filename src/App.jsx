@@ -396,7 +396,8 @@ export default function App() {
   const [selectedType, setSelectedType] = useState(null); // 'node' | 'arrow' | null
 
   // Unified tool mode: 'select' | 'move' | 'draw' | 'eraser'
-  const [toolMode, setToolMode] = useState('select');
+  // Mobile defaults to 'move' (pan + drag nodes), desktop to 'select'
+  const [toolMode, setToolMode] = useState(isMobile ? 'move' : 'select');
   const [drawColor, setDrawColor] = useState('#6c8cff');
   const [drawWidth, setDrawWidth] = useState(2);
 
@@ -866,6 +867,18 @@ export default function App() {
     onAddNode(Math.round((cx - 110) / GRID) * GRID, Math.round((cy - 30) / GRID) * GRID);
   }, [viewport, onAddNode]);
 
+  const handleAddText = useCallback(() => {
+    const cx = (window.innerWidth / 2 - viewport.panX) / viewport.zoom;
+    const cy = (window.innerHeight / 2 - viewport.panY) / viewport.zoom;
+    const GRID = 20;
+    const id = genId();
+    const node = { id, x: Math.round((cx - 80) / GRID) * GRID, y: Math.round((cy - 20) / GRID) * GRID, text: '', color: '#6c8cff', width: 160, style: 'text' };
+    setStateWithHistory((prev) => ({ ...prev, nodes: { ...prev.nodes, [id]: node } }));
+    send({ type: 'node:add', node });
+    setSelectedId(id);
+    setSelectedType('node');
+  }, [viewport, setStateWithHistory, send]);
+
   const handleZoomIn = useCallback(() => {
     const cx = window.innerWidth / 2;
     const cy = window.innerHeight / 2;
@@ -1030,7 +1043,13 @@ export default function App() {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 2v12M2 8h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          Add Node
+          Node
+        </button>
+        <button className="toolbar-btn" onClick={handleAddText} title="Add Text">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <text x="3" y="13" fill="currentColor" fontSize="13" fontWeight="bold" fontFamily="sans-serif">T</text>
+          </svg>
+          Text
         </button>
         <div className="toolbar-divider" />
 

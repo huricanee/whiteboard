@@ -582,8 +582,9 @@ export default function Canvas({
           }
         }
 
-        // === SELECT MODE ===
-        if (mode === 'select') {
+        // === MOVE MODE (default on mobile) ===
+        // Pan canvas, but also: drag nodes, create arrows from anchors, tap to select/edit
+        if (mode === 'move') {
           // Check if touch is near an anchor -> start arrow creation
           const anchorHit = findNearAnchor(world, 20);
           if (anchorHit) {
@@ -617,7 +618,7 @@ export default function Canvas({
               };
               return;
             }
-            // Drag single node
+            // Drag single node (offset from node origin, not just left edge)
             const n = currentNodes[hitNodeId];
             onSelect(hitNodeId, 'node');
             touchState = {
@@ -633,7 +634,21 @@ export default function Canvas({
             return;
           }
 
-          // Check if inside selection bounding box -> drag selection (strokes only case)
+          // Background: pan
+          touchState = {
+            type: 'pan',
+            lastX: t.clientX,
+            lastY: t.clientY,
+            startX: t.clientX,
+            startY: t.clientY,
+            moved: false,
+          };
+          return;
+        }
+
+        // === SELECT MODE (rect selection) ===
+        if (mode === 'select') {
+          // Check if inside selection bounding box -> drag selection
           const sel = selectionRef.current;
           if (sel.strokeIds.size > 0 || sel.nodeIds.size > 0) {
             const bounds = getSelectionBounds(sel, currentNodes, drawStrokesRef.current, hm);
@@ -650,26 +665,13 @@ export default function Canvas({
             }
           }
 
-          // Background tap in select mode -> rect selection (not pan)
+          // Background drag -> rect selection
           onSelect(null, null);
           onSelectionChange({ nodeIds: new Set(), arrowIds: new Set(), strokeIds: new Set() });
           touchState = {
             type: 'rectSelect',
             startWorld: world,
             startScreen: { x: mx, y: my },
-            moved: false,
-          };
-          return;
-        }
-
-        // === MOVE MODE ===
-        if (mode === 'move') {
-          touchState = {
-            type: 'pan',
-            lastX: t.clientX,
-            lastY: t.clientY,
-            startX: t.clientX,
-            startY: t.clientY,
             moved: false,
           };
           return;
@@ -898,15 +900,22 @@ export default function Canvas({
       }
     }
 
+    function onTouchCancel(e) {
+      // For erase mode, ignore cancel — DOM mutations from deleting nodes can
+      // trigger touchcancel, but we want to keep erasing on continued touch.
+      if (touchState && touchState.type === 'erase') return;
+      onTouchEnd(e);
+    }
+
     el.addEventListener('touchstart', onTouchStart, { passive: false });
     el.addEventListener('touchmove', onTouchMove, { passive: false });
     el.addEventListener('touchend', onTouchEnd, { passive: false });
-    el.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    el.addEventListener('touchcancel', onTouchCancel, { passive: false });
     return () => {
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
-      el.removeEventListener('touchcancel', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchCancel);
     };
   }, [isMobile, onUpdateViewport, onUpdateNode, onAddStroke, onAddArrow, onSelect, onNodeDragEnd, onSelectionDragEnd, onMoveSelection, onSelectionChange, screenToWorld]);
 
@@ -1625,14 +1634,14 @@ export default function Canvas({
       <div
         key={node.id}
         ref={(el) => registerNodeEl(node.id, el)}
-        className={`wb-node${isSelected ? ' selected' : ''}${isDragging ? ' dragging' : ''}${isInSelection ? ' in-selection' : ''}`}
+        className={`wb-node${node.style === 'text' ? ' text-node' : ''}${isSelected ? ' selected' : ''}${isDragging ? ' dragging' : ''}${isInSelection ? ' in-selection' : ''}`}
         style={{
           left: node.x,
           top: node.y,
           width: node.width || 220,
-          minHeight: height,
-          borderColor: color,
-          boxShadow: `0 0 ${isSelected || isInSelection ? 20 : 12}px ${isSelected || isInSelection ? 4 : 2}px ${color}22, inset 0 0 ${isSelected || isInSelection ? 16 : 8}px ${color}08`,
+          minHeight: node.style === 'text' ? 20 : height,
+          borderColor: node.style === 'text' ? 'transparent' : color,
+          boxShadow: node.style === 'text' ? 'none' : `0 0 ${isSelected || isInSelection ? 20 : 12}px ${isSelected || isInSelection ? 4 : 2}px ${color}22, inset 0 0 ${isSelected || isInSelection ? 16 : 8}px ${color}08`,
         }}
         onMouseDown={(e) => onNodeMouseDown(e, node.id)}
       >
