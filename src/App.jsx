@@ -479,6 +479,16 @@ export default function App() {
   const [drawColor, setDrawColor] = useState('#6c8cff');
   const [drawWidth, setDrawWidth] = useState(2);
 
+  // LaTeX source mode toggle (show raw LaTeX in all nodes)
+  const [sourceMode, setSourceMode] = useState(() => localStorage.getItem('catego-source-mode') === 'true');
+  const toggleSourceMode = useCallback(() => {
+    setSourceMode(prev => {
+      const next = !prev;
+      localStorage.setItem('catego-source-mode', String(next));
+      return next;
+    });
+  }, []);
+
   // Draw options panel (double-tap draw button)
   const [showDrawOptions, setShowDrawOptions] = useState(false);
   const lastDrawTapRef = useRef(0);
@@ -1232,6 +1242,17 @@ export default function App() {
           </svg>
         </button>
 
+        <div className="toolbar-divider" />
+        <button
+          className={`toolbar-btn${sourceMode ? ' tool-active' : ''}`}
+          onClick={toggleSourceMode}
+          title={sourceMode ? 'Show rendered LaTeX' : 'Show LaTeX source'}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M5 3L1 8l4 5M11 3l4 5-4 5M9 2l-2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+
         {/* Color palette - shown when something is selected or in draw mode */}
         {showPalette && (
           <>
@@ -1307,6 +1328,7 @@ export default function App() {
         onNodeDragEnd={onNodeDragEnd}
         isMobile={isMobile}
         onUpdateArrow={onUpdateArrow}
+        sourceMode={sourceMode}
       />
     </>
   );

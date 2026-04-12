@@ -206,6 +206,19 @@
   pointer-events: none;
 }
 
+/* Rendered LaTeX inside nodes */
+.wb-node .node-text-rendered {
+  cursor: pointer;
+}
+
+.wb-node .node-text-rendered .katex {
+  font-size: 1.1em;
+}
+
+.wb-node .node-text-rendered .katex-display {
+  margin: 0.3em 0;
+}
+
 /* ============================================================
    Anchor dots
    ============================================================ */

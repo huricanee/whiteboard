@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import './canvas.css';
+import 'katex/dist/katex.min.css';
+import { hasLatex, renderLatexToHtml } from './latex.js';
 
 const GRID_SIZE = 20;
 const MIN_ZOOM = 0.15;
@@ -308,6 +310,7 @@ export default function Canvas({
   onNodeDragEnd,
   isMobile,
   onUpdateArrow,
+  sourceMode,
 }) {
   const rootRef = useRef(null);
   const transformRef = useRef(null);
@@ -1646,29 +1649,38 @@ export default function Canvas({
         }}
         onMouseDown={(e) => onNodeMouseDown(e, node.id)}
       >
-        <span
-          className="node-text"
-          contentEditable={isMobile || isEditing}
-          suppressContentEditableWarning
-          readOnly={isMobile && !isEditing ? true : undefined}
-          onClick={(e) => onTextClick(e, node.id)}
-          onFocus={() => { if (isMobile) { onSelect(node.id, 'node'); setEditingNodeId(node.id); editingRef.current = node.id; } }}
-          onBlur={(e) => onTextBlur(e, node.id)}
-          onKeyDown={(e) => onTextKeyDown(e, node.id)}
-          onInput={(e) => {
-            const el = e.target.closest('.wb-node');
-            if (el) {
-              el.style.minHeight = 'auto';
-              const natural = el.offsetHeight;
-              const snapped = Math.max(60, Math.ceil(natural / GRID_SIZE) * GRID_SIZE);
-              el.style.minHeight = snapped + 'px';
-              nodeHeightRef.current[node.id] = snapped;
-              setNodeHeightMap((prev) => ({ ...prev, [node.id]: snapped }));
-            }
-          }}
-        >
-          {node.text}
-        </span>
+        {/* LaTeX rendered view: show when not editing and not in source mode and text has LaTeX */}
+        {!isEditing && !sourceMode && hasLatex(node.text) ? (
+          <span
+            className="node-text node-text-rendered"
+            onClick={(e) => onTextClick(e, node.id)}
+            dangerouslySetInnerHTML={{ __html: renderLatexToHtml(node.text).html }}
+          />
+        ) : (
+          <span
+            className="node-text"
+            contentEditable={isMobile || isEditing}
+            suppressContentEditableWarning
+            readOnly={isMobile && !isEditing ? true : undefined}
+            onClick={(e) => onTextClick(e, node.id)}
+            onFocus={() => { if (isMobile) { onSelect(node.id, 'node'); setEditingNodeId(node.id); editingRef.current = node.id; } }}
+            onBlur={(e) => onTextBlur(e, node.id)}
+            onKeyDown={(e) => onTextKeyDown(e, node.id)}
+            onInput={(e) => {
+              const el = e.target.closest('.wb-node');
+              if (el) {
+                el.style.minHeight = 'auto';
+                const natural = el.offsetHeight;
+                const snapped = Math.max(60, Math.ceil(natural / GRID_SIZE) * GRID_SIZE);
+                el.style.minHeight = snapped + 'px';
+                nodeHeightRef.current[node.id] = snapped;
+                setNodeHeightMap((prev) => ({ ...prev, [node.id]: snapped }));
+              }
+            }}
+          >
+            {node.text}
+          </span>
+        )}
 
         {node.style !== 'text' && ANCHORS.map((a) => (
           <div
