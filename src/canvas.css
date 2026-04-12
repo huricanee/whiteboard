@@ -231,14 +231,19 @@
 
 .wb-node .node-text-rendered .katex {
   font-size: 1.1em;
-  /* Force crisp text rendering inside GPU-composited transform layer */
+  line-height: 1.8;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
 .wb-node .node-text-rendered .katex-display {
-  margin: 0.3em 0;
+  margin: 0.5em 0;
+}
+
+/* Allow tall formulas (fractions, integrals) to expand naturally */
+.wb-node .node-text-rendered .katex-display > .katex > .katex-html {
+  line-height: normal;
 }
 
 /* ============================================================
@@ -329,6 +334,10 @@
   opacity: 0.3;
   cursor: default;
   pointer-events: none;
+}
+
+.toolbar-btn.toolbar-btn-small {
+  padding: 4px 6px;
 }
 
 .toolbar-divider {

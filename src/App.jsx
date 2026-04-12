@@ -1270,6 +1270,33 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* Text alignment - shown when a node is selected */}
+        {selectedType === 'node' && selectedId && nodes[selectedId] && (
+          <>
+            <div className="toolbar-divider" />
+            {['left', 'center', 'right'].map(align => (
+              <button
+                key={align}
+                className={`toolbar-btn toolbar-btn-small${(nodes[selectedId].align || 'center') === align ? ' tool-active' : ''}`}
+                onClick={() => onUpdateNode(selectedId, { align })}
+                title={`Align ${align}`}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  {align === 'left' && <>
+                    <path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </>}
+                  {align === 'center' && <>
+                    <path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </>}
+                  {align === 'right' && <>
+                    <path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </>}
+                </svg>
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Draw options panel (color + width picker) */}

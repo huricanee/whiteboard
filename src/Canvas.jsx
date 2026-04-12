@@ -1710,12 +1710,14 @@ export default function Canvas({
         {!isEditing && !sourceMode && hasLatex(node.text) ? (
           <span
             className="node-text node-text-rendered"
+            style={{ textAlign: node.align || 'center' }}
             onClick={(e) => onTextClick(e, node.id)}
             dangerouslySetInnerHTML={{ __html: renderLatexToHtml(node.text).html }}
           />
         ) : (
           <span
             className="node-text"
+            style={{ textAlign: node.align || 'center' }}
             contentEditable={isMobile || isEditing}
             suppressContentEditableWarning
             readOnly={isMobile && !isEditing ? true : undefined}
