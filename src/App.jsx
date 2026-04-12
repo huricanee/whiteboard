@@ -70,6 +70,7 @@ function loadState(bid) {
         arrows: parsed.arrows || {},
         viewport: parsed.viewport || { panX: 0, panY: 0, zoom: 1 },
         strokes,
+        regions: parsed.regions || {},
       };
     }
   } catch {
@@ -86,6 +87,7 @@ function defaultState() {
     },
     arrows: {},
     strokes: [],
+    regions: {},
     viewport: { panX: 0, panY: 0, zoom: 1 },
   };
 }
@@ -588,6 +590,7 @@ export default function App() {
       nodes: serverState.nodes || {},
       arrows: serverState.arrows || {},
       strokes: serverState.strokes || [],
+      regions: serverState.regions || {},
     }));
   }, []);
 
@@ -815,8 +818,8 @@ export default function App() {
   }, [setStateWithHistory, send]);
 
   const onRegionDragEnd = useCallback(() => {
-    setState(prev => { pushHistory(prev); return prev; });
-  }, [pushHistory]);
+    setState(prev => { pushHistorySnapshot(prev); return prev; });
+  }, [pushHistorySnapshot]);
 
   const onSelect = useCallback((id, type) => {
     setSelectedId(id);
