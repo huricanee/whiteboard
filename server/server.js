@@ -239,6 +239,16 @@ async function initDb() {
         );
       }
     }
+    // View-only share tokens (public links for read-only access without login)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS view_tokens (
+        token       TEXT PRIMARY KEY,
+        board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+        created_by  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // Add regions column if missing (idempotent migration)
     await client.query(`ALTER TABLE board_state ADD COLUMN IF NOT EXISTS regions JSONB NOT NULL DEFAULT '{}'`);
     await client.query(`ALTER TABLE board_snapshots ADD COLUMN IF NOT EXISTS regions JSONB NOT NULL DEFAULT '{}'`);
@@ -920,6 +930,53 @@ app.delete('/api/boards/:id/members/:username', requireBoardAccess, async (req, 
     );
     console.log(`Removed ${targetUsername} from board ${boardId} by ${req.username}`);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================================================================
+   View-only share links (public, no login required)
+   ================================================================ */
+
+// Create a view token for a board (owner-only)
+app.post('/api/boards/:id/share', requireBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  if (!(await isOwner(req.username, boardId))) {
+    return res.status(403).json({ error: 'Only the board owner can create share links' });
+  }
+  const token = generateId(16);
+  try {
+    await pool.query(
+      'INSERT INTO view_tokens (token, board_id, created_by) VALUES ($1, $2, $3)',
+      [token, boardId, req.username]
+    );
+    res.json({ ok: true, token, url: `https://whiteboard-three-theta.vercel.app/view/${token}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get board data via view token (public, no auth)
+app.get('/api/view/:token', async (req, res) => {
+  if (!pool || !dbReady) return res.status(503).json({ error: 'DB not available' });
+  try {
+    const result = await pool.query(
+      `SELECT vt.board_id, b.name FROM view_tokens vt
+       JOIN boards b ON b.id = vt.board_id
+       WHERE vt.token = $1`,
+      [req.params.token]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid share link' });
+    }
+    const { board_id, name } = result.rows[0];
+    const state = await loadBoardState(board_id);
+    res.json({
+      ok: true,
+      board: { id: board_id, name },
+      state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes, regions: state.regions || {} },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

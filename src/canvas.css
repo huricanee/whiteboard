@@ -270,6 +270,36 @@
   box-shadow: 0 0 16px 2px color-mix(in srgb, var(--region-color) 30%, transparent);
 }
 
+/* Region label — positioned above the top-left corner */
+.region-label {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  outline: none;
+  background: transparent;
+  pointer-events: all;
+  cursor: text;
+  min-width: 20px;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.region-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.region-label:focus {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.region-label:empty::before {
+  content: "Label...";
+  opacity: 0.3;
+}
+
 /* Border hit area — thick invisible zone along the border for mouse interaction */
 .region-border-hit {
   position: absolute;
@@ -520,6 +550,13 @@
 /* Draw mode indicator */
 .canvas-root.draw-mode {
   cursor: crosshair;
+}
+
+/* In draw mode, all nodes and regions become transparent to pointer events
+   so the user can freely draw over everything */
+.canvas-root.draw-mode .node-layer,
+.canvas-root.draw-mode .region-layer {
+  pointer-events: none;
 }
 
 /* Move mode indicator */

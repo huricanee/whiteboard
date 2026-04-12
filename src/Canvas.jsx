@@ -941,6 +941,10 @@ export default function Canvas({
 
   /* ---- Eraser perform ref (set below, used in event handlers) ---- */
   const performEraseRef = useRef(null);
+  const onUpdateRegionRef = useRef(onUpdateRegion);
+  useEffect(() => { onUpdateRegionRef.current = onUpdateRegion; }, [onUpdateRegion]);
+  const onRegionDragEndRef = useRef(onRegionDragEnd);
+  useEffect(() => { onRegionDragEndRef.current = onRegionDragEnd; }, [onRegionDragEnd]);
 
   const onCanvasMouseDown = useCallback((e) => {
     if (e.button !== 0 && e.button !== 1) return;
@@ -1396,7 +1400,7 @@ export default function Canvas({
         const vp = vpRef.current;
         const worldX = (mx - vp.panX) / vp.zoom;
         const worldY = (my - vp.panY) / vp.zoom;
-        onUpdateRegion(ds.regionId, { x: snap(worldX - ds.offsetX), y: snap(worldY - ds.offsetY) });
+        onUpdateRegionRef.current(ds.regionId, { x: snap(worldX - ds.offsetX), y: snap(worldY - ds.offsetY) });
       } else if (ds.type === 'regionResize') {
         const vp = vpRef.current;
         const dx = (e.clientX - ds.startMouseX) / vp.zoom;
@@ -1407,7 +1411,7 @@ export default function Canvas({
         else if (ds.corner === 'sw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); newX = snap(ds.startX + ds.startW - newW); }
         else if (ds.corner === 'ne') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newY = snap(ds.startY + ds.startH - newH); }
         else if (ds.corner === 'nw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newX = snap(ds.startX + ds.startW - newW); newY = snap(ds.startY + ds.startH - newH); }
-        onUpdateRegion(ds.regionId, { x: newX, y: newY, w: newW, h: newH });
+        onUpdateRegionRef.current(ds.regionId, { x: newX, y: newY, w: newW, h: newH });
       }
     }
 
@@ -1444,7 +1448,7 @@ export default function Canvas({
         onNodeDragEnd(); // push history snapshot
       }
       if (ds && (ds.type === 'regionDrag' || ds.type === 'regionResize')) {
-        onRegionDragEnd();
+        onRegionDragEndRef.current();
       }
       if (ds && ds.type === 'arrow') {
         setArrowPreview((prev) => {
@@ -1877,7 +1881,20 @@ export default function Canvas({
                   '--region-color': color,
                 }}
               >
-                {/* Invisible interior — pointer events pass through */}
+                {/* Region label — above top-left corner */}
+                <span
+                  className="region-label"
+                  contentEditable
+                  suppressContentEditableWarning
+                  style={{ color }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onBlur={(e) => {
+                    const text = e.target.textContent || '';
+                    onUpdateRegionRef.current(region.id, { label: text });
+                  }}
+                >
+                  {region.label || ''}
+                </span>
                 {/* Border hit area — selectable only by edge */}
                 <div
                   className="region-border-hit"

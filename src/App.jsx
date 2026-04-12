@@ -316,7 +316,60 @@ function MembersPanel({ boardId, authToken }) {
           {status.msg}
         </div>
       )}
+
+      {/* View-only share link */}
+      <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #2a2a4a' }}>
+        <div style={{ color: '#aaa', fontSize: '0.75rem', marginBottom: '6px' }}>View-only link</div>
+        <ShareLink boardId={boardId} authToken={authToken} />
+      </div>
     </div>
+  );
+}
+
+function ShareLink({ boardId, authToken }) {
+  const [link, setLink] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  async function handleCreate() {
+    setCreating(true);
+    try {
+      const res = await fetch(`${SERVER_URL}/api/boards/${boardId}/share`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setLink(data.url);
+        navigator.clipboard?.writeText(data.url);
+      }
+    } catch { /* ignore */ }
+    setCreating(false);
+  }
+
+  if (link) {
+    return (
+      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+        <input readOnly value={link} onClick={e => { e.target.select(); navigator.clipboard?.writeText(link); }}
+          style={{
+            flex: 1, padding: '4px 6px', background: '#2a2a4a', color: '#aaa',
+            border: '1px solid #3a3a5a', borderRadius: '4px', fontSize: '0.7rem', outline: 'none',
+          }}
+        />
+        <button onClick={() => setLink(null)} style={{
+          background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '0.7rem',
+        }}>new</button>
+      </div>
+    );
+  }
+
+  return (
+    <button onClick={handleCreate} disabled={creating} style={{
+      padding: '4px 10px', background: '#2a2a4a', color: '#aaa',
+      border: '1px solid #3a3a5a', borderRadius: '6px', cursor: 'pointer',
+      fontSize: '0.75rem', width: '100%',
+    }}>
+      {creating ? '...' : 'Generate view-only link'}
+    </button>
   );
 }
 

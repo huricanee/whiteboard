@@ -1,5 +1,6 @@
 {
   "rewrites": [
-    { "source": "/auth/:token", "destination": "/index.html" }
+    { "source": "/auth/:token", "destination": "/index.html" },
+    { "source": "/view/:token", "destination": "/index.html" }
   ]
 }
