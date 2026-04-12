@@ -1875,7 +1875,7 @@ export default function Canvas({
         ref={transformRef}
         className="canvas-transform"
         style={{
-          transform: `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`,
+          transform: `translate3d(${panX}px, ${panY}px, 0) scale3d(${zoom}, ${zoom}, 1)`,
         }}
       >
         {/* Regions layer — rendered below everything */}
