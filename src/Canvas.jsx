@@ -1574,6 +1574,17 @@ export default function Canvas({
   /* ================================================================
      Render helpers
      ================================================================ */
+  // Cache rendered LaTeX HTML — only recompute when node text changes, not on pan/zoom
+  const latexCache = useMemo(() => {
+    const cache = {};
+    for (const node of Object.values(nodes)) {
+      if (hasLatex(node.text)) {
+        cache[node.id] = renderLatexToHtml(node.text).html;
+      }
+    }
+    return cache;
+  }, [nodes]);
+
   const { panX, panY, zoom } = viewport;
   const gridSize = GRID_SIZE * zoom;
 
@@ -1707,12 +1718,12 @@ export default function Canvas({
         onMouseDown={(e) => onNodeMouseDown(e, node.id)}
       >
         {/* LaTeX rendered view: show when not editing and not in source mode and text has LaTeX */}
-        {!isEditing && !sourceMode && hasLatex(node.text) ? (
+        {!isEditing && !sourceMode && latexCache[node.id] ? (
           <span
             className="node-text node-text-rendered"
             style={{ textAlign: node.align || 'center' }}
             onClick={(e) => onTextClick(e, node.id)}
-            dangerouslySetInnerHTML={{ __html: renderLatexToHtml(node.text).html }}
+            dangerouslySetInnerHTML={{ __html: latexCache[node.id] }}
           />
         ) : (
           <span
