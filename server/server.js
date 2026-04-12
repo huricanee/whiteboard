@@ -768,10 +768,20 @@ app.post('/api/boards/:id/snapshots/:snapshotId/restore', requireBoardAccess, as
 /* ================================================================
    Bot-friendly read-only API (for Albert to query via WebFetch)
    Returns compact JSON to minimize context usage.
+   Bot authenticates via ?secret=BOT_API_SECRET (no user auth needed).
    ================================================================ */
 
+// Middleware: allow access if valid bot secret is provided
+function requireBotOrBoardAccess(req, res, next) {
+  if (req.query.secret === BOT_API_SECRET) {
+    req.username = '__bot__';
+    return next();
+  }
+  requireBoardAccess(req, res, next);
+}
+
 // Search nodes by text (case-insensitive substring match)
-app.get('/api/boards/:id/search', requireBoardAccess, async (req, res) => {
+app.get('/api/boards/:id/search', requireBotOrBoardAccess, async (req, res) => {
   const { id } = req.params;
   const q = (req.query.q || '').toLowerCase();
   if (!q) return res.json([]);
@@ -787,7 +797,7 @@ app.get('/api/boards/:id/search', requireBoardAccess, async (req, res) => {
 });
 
 // Get N most recently added nodes (by ID sort — IDs are time-based)
-app.get('/api/boards/:id/recent', requireBoardAccess, async (req, res) => {
+app.get('/api/boards/:id/recent', requireBotOrBoardAccess, async (req, res) => {
   const { id } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   try {
@@ -803,7 +813,7 @@ app.get('/api/boards/:id/recent', requireBoardAccess, async (req, res) => {
 });
 
 // Compact graph: node names + connections (no coordinates, no strokes)
-app.get('/api/boards/:id/graph', requireBoardAccess, async (req, res) => {
+app.get('/api/boards/:id/graph', requireBotOrBoardAccess, async (req, res) => {
   const { id } = req.params;
   try {
     const state = await loadBoardState(id);
