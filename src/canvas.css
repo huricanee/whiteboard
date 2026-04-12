@@ -37,6 +37,7 @@
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  will-change: transform;
 }
 
 /* ============================================================
@@ -245,7 +246,11 @@
 
 .wb-node .node-text-rendered .katex-display {
   margin: 0.5em 0;
-  text-align: inherit; /* respect node's alignment instead of KaTeX's default center */
+  text-align: inherit !important;
+}
+
+.wb-node .node-text-rendered .katex-display > .katex {
+  text-align: inherit !important;
 }
 
 /* ============================================================
