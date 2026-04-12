@@ -1137,6 +1137,27 @@ export default function Canvas({
   }, [screenToWorld]);
 
   /* ================================================================
+     Mouse down on a resize handle -> start resizing node
+     ================================================================ */
+  const onResizeMouseDown = useCallback((e, nodeId, corner) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const node = nodes[nodeId];
+    if (!node) return;
+    dragState.current = {
+      type: 'resize',
+      nodeId,
+      corner, // 'se' | 'sw' | 'ne' | 'nw'
+      startX: node.x,
+      startY: node.y,
+      startW: node.width || 220,
+      startH: nodeHeightRef.current[nodeId] || 60,
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+    };
+  }, [nodes]);
+
+  /* ================================================================
      Global mousemove / mouseup
      ================================================================ */
   // We need stable refs to state for use in the mousemove handler
@@ -1296,6 +1317,39 @@ export default function Canvas({
           snapNodeId,
           snapAnchor,
         });
+      } else if (ds.type === 'resize') {
+        const vp = vpRef.current;
+        const dx = (e.clientX - ds.startMouseX) / vp.zoom;
+        const dy = (e.clientY - ds.startMouseY) / vp.zoom;
+        const MIN_W = 60;
+        const MIN_H = 40;
+
+        let newW = ds.startW;
+        let newH = ds.startH;
+        let newX = ds.startX;
+        let newY = ds.startY;
+
+        if (ds.corner === 'se') {
+          newW = snap(Math.max(MIN_W, ds.startW + dx));
+          newH = snap(Math.max(MIN_H, ds.startH + dy));
+        } else if (ds.corner === 'sw') {
+          newW = snap(Math.max(MIN_W, ds.startW - dx));
+          newH = snap(Math.max(MIN_H, ds.startH + dy));
+          newX = snap(ds.startX + ds.startW - newW);
+        } else if (ds.corner === 'ne') {
+          newW = snap(Math.max(MIN_W, ds.startW + dx));
+          newH = snap(Math.max(MIN_H, ds.startH - dy));
+          newY = snap(ds.startY + ds.startH - newH);
+        } else if (ds.corner === 'nw') {
+          newW = snap(Math.max(MIN_W, ds.startW - dx));
+          newH = snap(Math.max(MIN_H, ds.startH - dy));
+          newX = snap(ds.startX + ds.startW - newW);
+          newY = snap(ds.startY + ds.startH - newH);
+        }
+
+        onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW });
+        nodeHeightRef.current[ds.nodeId] = newH;
+        setNodeHeightMap(prev => ({ ...prev, [ds.nodeId]: newH }));
       }
     }
 
@@ -1327,6 +1381,9 @@ export default function Canvas({
       }
       if (ds && ds.type === 'selectionDrag') {
         onSelectionDragEnd();
+      }
+      if (ds && ds.type === 'resize') {
+        onNodeDragEnd(); // push history snapshot
       }
       if (ds && ds.type === 'arrow') {
         setArrowPreview((prev) => {
@@ -1690,6 +1747,15 @@ export default function Canvas({
             onMouseDown={(e) => onAnchorMouseDown(e, node.id, a)}
           />
         ))}
+
+        {/* Resize handles - shown when selected */}
+        {(isSelected || isInSelection) && ['nw', 'ne', 'sw', 'se'].map((corner) => (
+          <div
+            key={corner}
+            className={`resize-handle ${corner}`}
+            onMouseDown={(e) => onResizeMouseDown(e, node.id, corner)}
+          />
+        ))}
       </div>
     );
   });
@@ -1728,7 +1794,7 @@ export default function Canvas({
         ref={transformRef}
         className="canvas-transform"
         style={{
-          transform: `translate3d(${panX}px, ${panY}px, 0) scale3d(${zoom}, ${zoom}, 1)`,
+          transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
         }}
       >
         <svg className="arrow-layer" width="20000" height="20000" viewBox="0 0 20000 20000">
