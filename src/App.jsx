@@ -98,6 +98,7 @@ function takeSnapshot(state) {
     nodes: JSON.parse(JSON.stringify(state.nodes)),
     arrows: JSON.parse(JSON.stringify(state.arrows)),
     strokes: JSON.parse(JSON.stringify(state.strokes || [])),
+    regions: JSON.parse(JSON.stringify(state.regions || {})),
   };
 }
 
@@ -107,6 +108,7 @@ function applySnapshot(state, snapshot) {
     nodes: snapshot.nodes,
     arrows: snapshot.arrows,
     strokes: snapshot.strokes,
+    regions: snapshot.regions || {},
   };
 }
 
@@ -505,7 +507,7 @@ export default function App() {
   const [historyIndex, setHistoryIndex] = useState(0);
   const historyLock = useRef(false); // prevent pushing history during undo/redo
 
-  const { nodes, arrows, viewport, strokes = [] } = state;
+  const { nodes, arrows, viewport, strokes = [], regions = {} } = state;
 
   // --- Real-time sync ---
   // boardId is managed as state above (for board switching)
@@ -549,8 +551,20 @@ export default function App() {
           return { ...prev, strokes: (prev.strokes || []).filter(s => s.id !== delta.id) };
         case 'stroke:pixel-erase':
           return { ...prev, strokes: delta.newStrokes };
+        case 'region:add':
+          return { ...prev, regions: { ...(prev.regions || {}), [delta.region.id]: delta.region } };
+        case 'region:update': {
+          const er = (prev.regions || {})[delta.id];
+          if (!er) return prev;
+          return { ...prev, regions: { ...prev.regions, [delta.id]: { ...er, ...delta.updates } } };
+        }
+        case 'region:delete': {
+          const nr = { ...(prev.regions || {}) };
+          delete nr[delta.id];
+          return { ...prev, regions: nr };
+        }
         case 'state:undo':
-          return { ...prev, nodes: delta.state.nodes, arrows: delta.state.arrows, strokes: delta.state.strokes };
+          return { ...prev, nodes: delta.state.nodes, arrows: delta.state.arrows, strokes: delta.state.strokes, regions: delta.state.regions || {} };
         case 'erase:objects': {
           const nIds = new Set(delta.nodeIds || []);
           const aIds = new Set(delta.arrowIds || []);
@@ -773,6 +787,37 @@ export default function App() {
     send({ type: 'stroke:add', stroke: strokeWithId });
   }, [setStateWithHistory, send]);
 
+  // Region callbacks
+  const onAddRegion = useCallback((region) => {
+    setStateWithHistory((prev) => ({
+      ...prev,
+      regions: { ...(prev.regions || {}), [region.id]: region },
+    }));
+    send({ type: 'region:add', region });
+  }, [setStateWithHistory, send]);
+
+  const onUpdateRegion = useCallback((id, updates) => {
+    setState((prev) => {
+      const existing = (prev.regions || {})[id];
+      if (!existing) return prev;
+      return { ...prev, regions: { ...prev.regions, [id]: { ...existing, ...updates } } };
+    });
+    send({ type: 'region:update', id, updates });
+  }, [send]);
+
+  const onDeleteRegion = useCallback((id) => {
+    setStateWithHistory((prev) => {
+      const nr = { ...(prev.regions || {}) };
+      delete nr[id];
+      return { ...prev, regions: nr };
+    });
+    send({ type: 'region:delete', id });
+  }, [setStateWithHistory, send]);
+
+  const onRegionDragEnd = useCallback(() => {
+    setState(prev => { pushHistory(prev); return prev; });
+  }, [pushHistory]);
+
   const onSelect = useCallback((id, type) => {
     setSelectedId(id);
     setSelectedType(type);
@@ -917,6 +962,11 @@ export default function App() {
         } else if (selectedId && selectedType === 'arrow') {
           e.preventDefault();
           onDeleteArrow(selectedId);
+        } else if (selectedId && selectedType === 'region') {
+          e.preventDefault();
+          onDeleteRegion(selectedId);
+          setSelectedId(null);
+          setSelectedType(null);
         }
       } else if (e.key === 'Escape') {
         setSelectedId(null);
@@ -966,6 +1016,24 @@ export default function App() {
     setSelectedId(id);
     setSelectedType('node');
   }, [viewport, setStateWithHistory, send]);
+
+  const handleAddRegion = useCallback(() => {
+    const cx = (window.innerWidth / 2 - viewport.panX) / viewport.zoom;
+    const cy = (window.innerHeight / 2 - viewport.panY) / viewport.zoom;
+    const GRID = 20;
+    const id = genId('r');
+    const region = {
+      id,
+      x: Math.round((cx - 150) / GRID) * GRID,
+      y: Math.round((cy - 100) / GRID) * GRID,
+      w: 300,
+      h: 200,
+      color: '#6c8cff',
+    };
+    onAddRegion(region);
+    setSelectedId(id);
+    setSelectedType('region');
+  }, [viewport, onAddRegion]);
 
   const handleZoomIn = useCallback(() => {
     const cx = window.innerWidth / 2;
@@ -1034,8 +1102,11 @@ export default function App() {
       };
       setState(newState);
       pushHistorySnapshot(newState);
+    } else if (selectedId && selectedType === 'region') {
+      onUpdateRegion(selectedId, { color });
+      pushHistorySnapshot({ ...state, regions: { ...state.regions, [selectedId]: { ...state.regions[selectedId], color } } });
     }
-  }, [selectedId, selectedType, onUpdateNode, toolMode, state, pushHistorySnapshot]);
+  }, [selectedId, selectedType, onUpdateNode, onUpdateRegion, toolMode, state, pushHistorySnapshot]);
 
   const activeColor = toolMode === 'draw' ? drawColor
     : selectedId && selectedType === 'node' ? (nodes[selectedId]?.color || '#6c8cff')
@@ -1117,6 +1188,12 @@ export default function App() {
             <text x="3" y="13" fill="currentColor" fontSize="13" fontWeight="bold" fontFamily="sans-serif">T</text>
           </svg>
           Text
+        </button>
+        <button className="toolbar-btn" onClick={handleAddRegion} title="Add Region">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2" fill="none" />
+          </svg>
+          Region
         </button>
         <div className="toolbar-divider" />
 
@@ -1356,6 +1433,9 @@ export default function App() {
         isMobile={isMobile}
         onUpdateArrow={onUpdateArrow}
         sourceMode={sourceMode}
+        regions={regions}
+        onUpdateRegion={onUpdateRegion}
+        onRegionDragEnd={onRegionDragEnd}
       />
     </>
   );

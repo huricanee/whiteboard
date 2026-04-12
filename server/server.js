@@ -239,6 +239,10 @@ async function initDb() {
         );
       }
     }
+    // Add regions column if missing (idempotent migration)
+    await client.query(`ALTER TABLE board_state ADD COLUMN IF NOT EXISTS regions JSONB NOT NULL DEFAULT '{}'`);
+    await client.query(`ALTER TABLE board_snapshots ADD COLUMN IF NOT EXISTS regions JSONB NOT NULL DEFAULT '{}'`);
+
     dbReady = true;
     console.log('Database tables initialized');
   } finally {
@@ -272,11 +276,11 @@ async function loadBoardState(boardId) {
   if (boardStates.has(boardId)) {
     return boardStates.get(boardId);
   }
-  let state = { nodes: {}, arrows: {}, strokes: [], dirty: false };
+  let state = { nodes: {}, arrows: {}, strokes: [], regions: {}, dirty: false };
   if (pool && dbReady) {
     try {
       const result = await pool.query(
-        'SELECT nodes, arrows, strokes FROM board_state WHERE board_id = $1',
+        'SELECT nodes, arrows, strokes, regions FROM board_state WHERE board_id = $1',
         [boardId]
       );
       if (result.rows.length > 0) {
@@ -285,6 +289,7 @@ async function loadBoardState(boardId) {
           nodes: row.nodes || {},
           arrows: row.arrows || {},
           strokes: row.strokes || [],
+          regions: row.regions || {},
           dirty: false,
         };
       }
@@ -302,11 +307,11 @@ async function saveBoardState(boardId) {
 
   try {
     await pool.query(
-      `INSERT INTO board_state (board_id, nodes, arrows, strokes, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO board_state (board_id, nodes, arrows, strokes, regions, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
        ON CONFLICT (board_id) DO UPDATE
-       SET nodes = $2, arrows = $3, strokes = $4, updated_at = NOW()`,
-      [boardId, JSON.stringify(state.nodes), JSON.stringify(state.arrows), JSON.stringify(state.strokes)]
+       SET nodes = $2, arrows = $3, strokes = $4, regions = $5, updated_at = NOW()`,
+      [boardId, JSON.stringify(state.nodes), JSON.stringify(state.arrows), JSON.stringify(state.strokes), JSON.stringify(state.regions || {})]
     );
     await pool.query(
       'UPDATE boards SET updated_at = NOW() WHERE id = $1',
@@ -340,10 +345,11 @@ async function saveSnapshot(boardId) {
 
   try {
     await pool.query(
-      `INSERT INTO board_snapshots (board_id, nodes, arrows, strokes, node_count)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO board_snapshots (board_id, nodes, arrows, strokes, regions, node_count)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
       [boardId, JSON.stringify(state.nodes), JSON.stringify(state.arrows),
-       JSON.stringify(state.strokes), Object.keys(state.nodes).length]
+       JSON.stringify(state.strokes), JSON.stringify(state.regions || {}),
+       Object.keys(state.nodes).length]
     );
     lastSnapshotHash.set(boardId, hash);
 
@@ -468,11 +474,34 @@ function applyDelta(state, msg) {
       break;
     }
 
+    case 'region:add':
+      if (msg.region && msg.region.id) {
+        if (!state.regions) state.regions = {};
+        state.regions[msg.region.id] = msg.region;
+        state.dirty = true;
+      }
+      break;
+
+    case 'region:update':
+      if (msg.id && state.regions && state.regions[msg.id]) {
+        Object.assign(state.regions[msg.id], msg.updates);
+        state.dirty = true;
+      }
+      break;
+
+    case 'region:delete':
+      if (msg.id && state.regions && state.regions[msg.id]) {
+        delete state.regions[msg.id];
+        state.dirty = true;
+      }
+      break;
+
     case 'state:undo':
       if (msg.state) {
         state.nodes = msg.state.nodes || {};
         state.arrows = msg.state.arrows || {};
         state.strokes = msg.state.strokes || [];
+        state.regions = msg.state.regions || {};
         state.dirty = true;
       }
       break;
@@ -746,10 +775,11 @@ app.post('/api/boards/:id/snapshots/:snapshotId/restore', requireBoardAccess, as
     if (result.rows.length === 0) return res.status(404).json({ error: 'Snapshot not found' });
 
     const snap = result.rows[0];
-    const state = boardStates.get(id) || { nodes: {}, arrows: {}, strokes: [], dirty: false };
+    const state = boardStates.get(id) || { nodes: {}, arrows: {}, strokes: [], regions: {}, dirty: false };
     state.nodes = snap.nodes || {};
     state.arrows = snap.arrows || {};
     state.strokes = snap.strokes || [];
+    state.regions = snap.regions || {};
     state.dirty = true;
     boardStates.set(id, state);
 
@@ -757,7 +787,7 @@ app.post('/api/boards/:id/snapshots/:snapshotId/restore', requireBoardAccess, as
     await saveBoardState(id);
 
     // Broadcast to all connected clients
-    broadcast(id, { type: 'state:undo', state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes } });
+    broadcast(id, { type: 'state:undo', state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes, regions: state.regions } });
 
     res.json({ ok: true, nodeCount: Object.keys(state.nodes).length });
   } catch (err) {
@@ -959,7 +989,7 @@ wss.on('connection', async (ws, request) => {
     const state = await loadBoardState(boardId);
     ws.send(JSON.stringify({
       type: 'init',
-      state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes },
+      state: { nodes: state.nodes, arrows: state.arrows, strokes: state.strokes, regions: state.regions || {} },
     }));
   } catch (err) {
     console.error(`Failed to load state for board ${boardId}:`, err.message);
