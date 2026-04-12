@@ -208,7 +208,6 @@
   border-radius: 2px;
   z-index: 10;
   opacity: 0.7;
-  pointer-events: all; /* override parent's pointer-events:none (regions) */
 }
 .resize-handle:hover {
   opacity: 1;
@@ -230,14 +229,9 @@
   cursor: pointer;
 }
 
-/* LaTeX rendered view: override the fixed line-height from .node-text
-   so formulas (fractions, integrals, etc.) can expand to natural height */
-.wb-node .node-text-rendered {
-  line-height: normal;
-}
-
 .wb-node .node-text-rendered .katex {
   font-size: 1.1em;
+  line-height: 1.8;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -245,80 +239,11 @@
 
 .wb-node .node-text-rendered .katex-display {
   margin: 0.5em 0;
-  text-align: inherit !important;
 }
 
-.wb-node .node-text-rendered .katex-display > .katex {
-  text-align: inherit !important;
-}
-
-/* ============================================================
-   Region layer — rectangular areas behind nodes
-   ============================================================ */
-.region-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 0;
-}
-
-.wb-region {
-  position: absolute;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--region-color) 8%, transparent);
-  border: 3px solid var(--region-color);
-  pointer-events: none; /* interior is pass-through */
-  box-sizing: border-box;
-}
-
-.wb-region.selected {
-  border-style: solid;
-  box-shadow: 0 0 16px 2px color-mix(in srgb, var(--region-color) 30%, transparent);
-}
-
-/* Region label — positioned above the top-left corner */
-.region-label {
-  position: absolute;
-  top: -24px;
-  left: 0;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  outline: none;
-  background: transparent;
-  pointer-events: all;
-  cursor: text;
-  min-width: 20px;
-  padding: 0 4px;
-  border-radius: 3px;
-}
-
-.region-label:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.region-label:focus {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.region-label:empty::before {
-  content: "Label...";
-  opacity: 0.3;
-}
-
-/* Border hit area — thick invisible zone along the border for mouse interaction */
-.region-border-hit {
-  position: absolute;
-  inset: -8px;
-  border: 12px solid transparent;
-  border-radius: 12px;
-  pointer-events: all;
-  cursor: grab;
-  box-sizing: border-box;
-}
-
-.region-border-hit:active {
-  cursor: grabbing;
+/* Allow tall formulas (fractions, integrals) to expand naturally */
+.wb-node .node-text-rendered .katex-display > .katex > .katex-html {
+  line-height: normal;
 }
 
 /* ============================================================
@@ -556,13 +481,6 @@
 /* Draw mode indicator */
 .canvas-root.draw-mode {
   cursor: crosshair;
-}
-
-/* In draw mode, all nodes and regions become transparent to pointer events
-   so the user can freely draw over everything */
-.canvas-root.draw-mode .node-layer,
-.canvas-root.draw-mode .region-layer {
-  pointer-events: none;
 }
 
 /* Move mode indicator */

@@ -311,9 +311,6 @@ export default function Canvas({
   isMobile,
   onUpdateArrow,
   sourceMode,
-  regions = {},
-  onUpdateRegion,
-  onRegionDragEnd,
 }) {
   const rootRef = useRef(null);
   const transformRef = useRef(null);
@@ -941,10 +938,6 @@ export default function Canvas({
 
   /* ---- Eraser perform ref (set below, used in event handlers) ---- */
   const performEraseRef = useRef(null);
-  const onUpdateRegionRef = useRef(onUpdateRegion);
-  useEffect(() => { onUpdateRegionRef.current = onUpdateRegion; }, [onUpdateRegion]);
-  const onRegionDragEndRef = useRef(onRegionDragEnd);
-  useEffect(() => { onRegionDragEndRef.current = onRegionDragEnd; }, [onRegionDragEnd]);
 
   const onCanvasMouseDown = useCallback((e) => {
     if (e.button !== 0 && e.button !== 1) return;
@@ -1144,45 +1137,6 @@ export default function Canvas({
   }, [screenToWorld]);
 
   /* ================================================================
-     Mouse down on region border -> start dragging or resizing region
-     ================================================================ */
-  const onRegionBorderMouseDown = useCallback((e, regionId) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    onSelect(regionId, 'region');
-    const region = regions[regionId];
-    if (!region) return;
-    const rect = rootRef.current.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const world = screenToWorld(mx, my);
-    dragState.current = {
-      type: 'regionDrag',
-      regionId,
-      offsetX: world.x - region.x,
-      offsetY: world.y - region.y,
-    };
-  }, [regions, onSelect, screenToWorld]);
-
-  const onRegionResizeMouseDown = useCallback((e, regionId, corner) => {
-    e.stopPropagation();
-    e.preventDefault();
-    const region = regions[regionId];
-    if (!region) return;
-    dragState.current = {
-      type: 'regionResize',
-      regionId,
-      corner,
-      startX: region.x,
-      startY: region.y,
-      startW: region.w,
-      startH: region.h,
-      startMouseX: e.clientX,
-      startMouseY: e.clientY,
-    };
-  }, [regions]);
-
-  /* ================================================================
      Mouse down on a resize handle -> start resizing node
      ================================================================ */
   const onResizeMouseDown = useCallback((e, nodeId, corner) => {
@@ -1369,12 +1323,11 @@ export default function Canvas({
         const dy = (e.clientY - ds.startMouseY) / vp.zoom;
         const MIN_W = 60;
         const MIN_H = 40;
-        // Right/bottom edge: startX stays fixed, width grows
-        // Left/top edge: far edge stays fixed, position adjusts
-        const farR = ds.startX + ds.startW;
-        const farB = ds.startY + ds.startH;
 
-        let newW = ds.startW, newH = ds.startH, newX = ds.startX, newY = ds.startY;
+        let newW = ds.startW;
+        let newH = ds.startH;
+        let newX = ds.startX;
+        let newY = ds.startY;
 
         if (ds.corner === 'se') {
           newW = snap(Math.max(MIN_W, ds.startW + dx));
@@ -1382,39 +1335,21 @@ export default function Canvas({
         } else if (ds.corner === 'sw') {
           newW = snap(Math.max(MIN_W, ds.startW - dx));
           newH = snap(Math.max(MIN_H, ds.startH + dy));
-          newX = farR - newW; // far-right edge stays fixed
+          newX = snap(ds.startX + ds.startW - newW);
         } else if (ds.corner === 'ne') {
           newW = snap(Math.max(MIN_W, ds.startW + dx));
           newH = snap(Math.max(MIN_H, ds.startH - dy));
-          newY = farB - newH; // far-bottom edge stays fixed
+          newY = snap(ds.startY + ds.startH - newH);
         } else if (ds.corner === 'nw') {
           newW = snap(Math.max(MIN_W, ds.startW - dx));
           newH = snap(Math.max(MIN_H, ds.startH - dy));
-          newX = farR - newW;
-          newY = farB - newH;
+          newX = snap(ds.startX + ds.startW - newW);
+          newY = snap(ds.startY + ds.startH - newH);
         }
 
         onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW });
         nodeHeightRef.current[ds.nodeId] = newH;
         setNodeHeightMap(prev => ({ ...prev, [ds.nodeId]: newH }));
-      } else if (ds.type === 'regionDrag') {
-        const vp = vpRef.current;
-        const worldX = (mx - vp.panX) / vp.zoom;
-        const worldY = (my - vp.panY) / vp.zoom;
-        onUpdateRegionRef.current(ds.regionId, { x: snap(worldX - ds.offsetX), y: snap(worldY - ds.offsetY) });
-      } else if (ds.type === 'regionResize') {
-        const vp = vpRef.current;
-        const dx = (e.clientX - ds.startMouseX) / vp.zoom;
-        const dy = (e.clientY - ds.startMouseY) / vp.zoom;
-        const MIN_S = 60;
-        const farR = ds.startX + ds.startW;
-        const farB = ds.startY + ds.startH;
-        let newW = ds.startW, newH = ds.startH, newX = ds.startX, newY = ds.startY;
-        if (ds.corner === 'se') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); }
-        else if (ds.corner === 'sw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); newX = farR - newW; }
-        else if (ds.corner === 'ne') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newY = farB - newH; }
-        else if (ds.corner === 'nw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newX = farR - newW; newY = farB - newH; }
-        onUpdateRegionRef.current(ds.regionId, { x: newX, y: newY, w: newW, h: newH });
       }
     }
 
@@ -1449,9 +1384,6 @@ export default function Canvas({
       }
       if (ds && ds.type === 'resize') {
         onNodeDragEnd(); // push history snapshot
-      }
-      if (ds && (ds.type === 'regionDrag' || ds.type === 'regionResize')) {
-        onRegionDragEndRef.current();
       }
       if (ds && ds.type === 'arrow') {
         setArrowPreview((prev) => {
@@ -1642,17 +1574,6 @@ export default function Canvas({
   /* ================================================================
      Render helpers
      ================================================================ */
-  // Cache rendered LaTeX HTML — only recompute when node text changes, not on every pan/zoom
-  const latexCache = useMemo(() => {
-    const cache = {};
-    for (const node of Object.values(nodes)) {
-      if (hasLatex(node.text)) {
-        cache[node.id] = renderLatexToHtml(node.text).html;
-      }
-    }
-    return cache;
-  }, [nodes]);
-
   const { panX, panY, zoom } = viewport;
   const gridSize = GRID_SIZE * zoom;
 
@@ -1786,12 +1707,12 @@ export default function Canvas({
         onMouseDown={(e) => onNodeMouseDown(e, node.id)}
       >
         {/* LaTeX rendered view: show when not editing and not in source mode and text has LaTeX */}
-        {!isEditing && !sourceMode && latexCache[node.id] ? (
+        {!isEditing && !sourceMode && hasLatex(node.text) ? (
           <span
             className="node-text node-text-rendered"
             style={{ textAlign: node.align || 'center' }}
             onClick={(e) => onTextClick(e, node.id)}
-            dangerouslySetInnerHTML={{ __html: latexCache[node.id] }}
+            dangerouslySetInnerHTML={{ __html: renderLatexToHtml(node.text).html }}
           />
         ) : (
           <span
@@ -1878,56 +1799,6 @@ export default function Canvas({
           transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
         }}
       >
-        {/* Regions layer — rendered below everything */}
-        <div className="region-layer">
-          {Object.values(regions).map((region) => {
-            const isRegionSelected = selectedType === 'region' && selectedId === region.id;
-            const color = region.color || '#6c8cff';
-            return (
-              <div
-                key={region.id}
-                className={`wb-region${isRegionSelected ? ' selected' : ''}`}
-                style={{
-                  left: region.x,
-                  top: region.y,
-                  width: region.w,
-                  height: region.h,
-                  '--region-color': color,
-                }}
-              >
-                {/* Region label — above top-left corner */}
-                <span
-                  className="region-label"
-                  contentEditable
-                  suppressContentEditableWarning
-                  style={{ color }}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onBlur={(e) => {
-                    const text = e.target.textContent || '';
-                    onUpdateRegionRef.current(region.id, { label: text });
-                  }}
-                >
-                  {region.label || ''}
-                </span>
-                {/* Border hit area — selectable only by edge */}
-                <div
-                  className="region-border-hit"
-                  onMouseDown={(e) => onRegionBorderMouseDown(e, region.id)}
-                />
-                {/* Resize handles when selected */}
-                {isRegionSelected && ['nw', 'ne', 'sw', 'se'].map((corner) => (
-                  <div
-                    key={corner}
-                    className={`resize-handle ${corner}`}
-                    style={{ background: color }}
-                    onMouseDown={(e) => onRegionResizeMouseDown(e, region.id, corner)}
-                  />
-                ))}
-              </div>
-            );
-          })}
-        </div>
-
         <svg className="arrow-layer" width="20000" height="20000" viewBox="0 0 20000 20000">
           {arrowElements}
         </svg>
