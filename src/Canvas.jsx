@@ -1369,11 +1369,12 @@ export default function Canvas({
         const dy = (e.clientY - ds.startMouseY) / vp.zoom;
         const MIN_W = 60;
         const MIN_H = 40;
+        // Right/bottom edge: startX stays fixed, width grows
+        // Left/top edge: far edge stays fixed, position adjusts
+        const farR = ds.startX + ds.startW;
+        const farB = ds.startY + ds.startH;
 
-        let newW = ds.startW;
-        let newH = ds.startH;
-        let newX = ds.startX;
-        let newY = ds.startY;
+        let newW = ds.startW, newH = ds.startH, newX = ds.startX, newY = ds.startY;
 
         if (ds.corner === 'se') {
           newW = snap(Math.max(MIN_W, ds.startW + dx));
@@ -1381,16 +1382,16 @@ export default function Canvas({
         } else if (ds.corner === 'sw') {
           newW = snap(Math.max(MIN_W, ds.startW - dx));
           newH = snap(Math.max(MIN_H, ds.startH + dy));
-          newX = snap(ds.startX + ds.startW - newW);
+          newX = farR - newW; // far-right edge stays fixed
         } else if (ds.corner === 'ne') {
           newW = snap(Math.max(MIN_W, ds.startW + dx));
           newH = snap(Math.max(MIN_H, ds.startH - dy));
-          newY = snap(ds.startY + ds.startH - newH);
+          newY = farB - newH; // far-bottom edge stays fixed
         } else if (ds.corner === 'nw') {
           newW = snap(Math.max(MIN_W, ds.startW - dx));
           newH = snap(Math.max(MIN_H, ds.startH - dy));
-          newX = snap(ds.startX + ds.startW - newW);
-          newY = snap(ds.startY + ds.startH - newH);
+          newX = farR - newW;
+          newY = farB - newH;
         }
 
         onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW });
@@ -1406,11 +1407,13 @@ export default function Canvas({
         const dx = (e.clientX - ds.startMouseX) / vp.zoom;
         const dy = (e.clientY - ds.startMouseY) / vp.zoom;
         const MIN_S = 60;
+        const farR = ds.startX + ds.startW;
+        const farB = ds.startY + ds.startH;
         let newW = ds.startW, newH = ds.startH, newX = ds.startX, newY = ds.startY;
         if (ds.corner === 'se') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); }
-        else if (ds.corner === 'sw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); newX = snap(ds.startX + ds.startW - newW); }
-        else if (ds.corner === 'ne') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newY = snap(ds.startY + ds.startH - newH); }
-        else if (ds.corner === 'nw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newX = snap(ds.startX + ds.startW - newW); newY = snap(ds.startY + ds.startH - newH); }
+        else if (ds.corner === 'sw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); newX = farR - newW; }
+        else if (ds.corner === 'ne') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newY = farB - newH; }
+        else if (ds.corner === 'nw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newX = farR - newW; newY = farB - newH; }
         onUpdateRegionRef.current(ds.regionId, { x: newX, y: newY, w: newW, h: newH });
       }
     }
