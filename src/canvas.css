@@ -229,9 +229,14 @@
   cursor: pointer;
 }
 
+/* LaTeX rendered view: override the fixed line-height from .node-text
+   so formulas (fractions, integrals, etc.) can expand to natural height */
+.wb-node .node-text-rendered {
+  line-height: normal;
+}
+
 .wb-node .node-text-rendered .katex {
   font-size: 1.1em;
-  line-height: 1.8;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -239,11 +244,6 @@
 
 .wb-node .node-text-rendered .katex-display {
   margin: 0.5em 0;
-}
-
-/* Allow tall formulas (fractions, integrals) to expand naturally */
-.wb-node .node-text-rendered .katex-display > .katex > .katex-html {
-  line-height: normal;
 }
 
 /* ============================================================
