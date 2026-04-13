@@ -1053,17 +1053,29 @@ export default function App() {
   /* ================================================================
      Toolbar actions
      ================================================================ */
+  // Get actual viewport from DOM (React state may lag behind DOM-direct pan)
+  const getActualViewport = useCallback(() => {
+    const el = document.querySelector('.canvas-transform');
+    if (el) {
+      const style = el.style.transform;
+      const m = style.match(/translate\(([^,]+)px,\s*([^)]+)px\)\s*scale\(([^)]+)\)/);
+      if (m) return { panX: parseFloat(m[1]), panY: parseFloat(m[2]), zoom: parseFloat(m[3]) };
+    }
+    return viewport;
+  }, [viewport]);
+
   const handleAddNode = useCallback(() => {
-    // Place new node at center of current view
-    const cx = (window.innerWidth / 2 - viewport.panX) / viewport.zoom;
-    const cy = (window.innerHeight / 2 - viewport.panY) / viewport.zoom;
+    const vp = getActualViewport();
+    const cx = (window.innerWidth / 2 - vp.panX) / vp.zoom;
+    const cy = (window.innerHeight / 2 - vp.panY) / vp.zoom;
     const GRID = 20;
     onAddNode(Math.round((cx - 110) / GRID) * GRID, Math.round((cy - 30) / GRID) * GRID);
-  }, [viewport, onAddNode]);
+  }, [getActualViewport, onAddNode]);
 
   const handleAddText = useCallback(() => {
-    const cx = (window.innerWidth / 2 - viewport.panX) / viewport.zoom;
-    const cy = (window.innerHeight / 2 - viewport.panY) / viewport.zoom;
+    const vp = getActualViewport();
+    const cx = (window.innerWidth / 2 - vp.panX) / vp.zoom;
+    const cy = (window.innerHeight / 2 - vp.panY) / vp.zoom;
     const GRID = 20;
     const id = genId();
     const node = { id, x: Math.round((cx - 80) / GRID) * GRID, y: Math.round((cy - 20) / GRID) * GRID, text: '', color: '#6c8cff', width: 160, style: 'text' };
@@ -1071,11 +1083,12 @@ export default function App() {
     send({ type: 'node:add', node });
     setSelectedId(id);
     setSelectedType('node');
-  }, [viewport, setStateWithHistory, send]);
+  }, [getActualViewport, setStateWithHistory, send]);
 
   const handleAddRegion = useCallback(() => {
-    const cx = (window.innerWidth / 2 - viewport.panX) / viewport.zoom;
-    const cy = (window.innerHeight / 2 - viewport.panY) / viewport.zoom;
+    const vp = getActualViewport();
+    const cx = (window.innerWidth / 2 - vp.panX) / vp.zoom;
+    const cy = (window.innerHeight / 2 - vp.panY) / vp.zoom;
     const GRID = 20;
     const id = genId('r');
     const region = {
@@ -1089,7 +1102,7 @@ export default function App() {
     onAddRegion(region);
     setSelectedId(id);
     setSelectedType('region');
-  }, [viewport, onAddRegion]);
+  }, [getActualViewport, onAddRegion]);
 
   const handleZoomIn = useCallback(() => {
     const cx = window.innerWidth / 2;

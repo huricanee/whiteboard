@@ -1051,6 +1051,40 @@ app.delete('/api/boards/:id/nodes/:nodeId', requireBotOrBoardAccess, async (req,
   }
 });
 
+// Batch create multiple nodes at once
+app.post('/api/boards/:id/nodes/batch', requireBotOrBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  const nodes = req.body.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return res.status(400).json({ error: 'nodes array required' });
+  }
+  try {
+    const state = await loadBoardState(boardId);
+    const created = [];
+    for (const n of nodes) {
+      const id = generateId();
+      const node = {
+        id,
+        x: n.x ?? 0,
+        y: n.y ?? 0,
+        text: n.text || '',
+        color: n.color || '#6c8cff',
+        width: n.width || 220,
+        ...(n.style ? { style: n.style } : {}),
+        ...(n.align ? { align: n.align } : {}),
+      };
+      state.nodes[id] = node;
+      created.push(node);
+      broadcast(boardId, { type: 'node:add', node });
+    }
+    state.dirty = true;
+    await saveBoardState(boardId);
+    res.status(201).json({ ok: true, count: created.length, nodes: created });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- HTTP + WebSocket server ---
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
