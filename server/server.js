@@ -982,6 +982,75 @@ app.get('/api/view/:token', async (req, res) => {
   }
 });
 
+/* ================================================================
+   Bot write API — create/update/delete nodes (bot secret required)
+   Changes are broadcast to connected WebSocket clients in real-time.
+   ================================================================ */
+
+// Create a node on a board
+app.post('/api/boards/:id/nodes', requireBotOrBoardAccess, async (req, res) => {
+  const boardId = req.params.id;
+  const { text, x, y, color, width, style, align } = req.body;
+  const id = generateId();
+  const node = {
+    id,
+    x: x ?? 0,
+    y: y ?? 0,
+    text: text || '',
+    color: color || '#6c8cff',
+    width: width || 220,
+    ...(style ? { style } : {}),
+    ...(align ? { align } : {}),
+  };
+  try {
+    const state = await loadBoardState(boardId);
+    state.nodes[id] = node;
+    state.dirty = true;
+    await saveBoardState(boardId);
+    broadcast(boardId, { type: 'node:add', node });
+    res.status(201).json({ ok: true, node });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a node on a board
+app.patch('/api/boards/:id/nodes/:nodeId', requireBotOrBoardAccess, async (req, res) => {
+  const { id: boardId, nodeId } = req.params;
+  const updates = req.body; // { text, x, y, color, width, ... }
+  try {
+    const state = await loadBoardState(boardId);
+    if (!state.nodes[nodeId]) return res.status(404).json({ error: 'Node not found' });
+    Object.assign(state.nodes[nodeId], updates);
+    state.dirty = true;
+    await saveBoardState(boardId);
+    broadcast(boardId, { type: 'node:update', id: nodeId, updates });
+    res.json({ ok: true, node: state.nodes[nodeId] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a node from a board
+app.delete('/api/boards/:id/nodes/:nodeId', requireBotOrBoardAccess, async (req, res) => {
+  const { id: boardId, nodeId } = req.params;
+  try {
+    const state = await loadBoardState(boardId);
+    if (!state.nodes[nodeId]) return res.status(404).json({ error: 'Node not found' });
+    delete state.nodes[nodeId];
+    // Also remove arrows connected to this node
+    for (const [aId, a] of Object.entries(state.arrows)) {
+      if (a.fromNodeId === nodeId || a.toNodeId === nodeId) delete state.arrows[aId];
+    }
+    state.dirty = true;
+    await saveBoardState(boardId);
+    broadcast(boardId, { type: 'node:delete', id: nodeId });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- HTTP + WebSocket server ---
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
