@@ -122,7 +122,6 @@
 
 .wb-node {
   position: absolute;
-  min-height: 60px;
   border-radius: 12px;
   background: var(--surface);
   border: 1px solid var(--accent);
@@ -130,11 +129,24 @@
   cursor: grab;
   user-select: none;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 12px 16px;
   transition: box-shadow 0.2s ease, border-color 0.15s ease;
   z-index: 2;
+  overflow: hidden;
+}
+
+/* Thin scrollbar when content overflows */
+.wb-node::-webkit-scrollbar {
+  width: 3px;
+}
+.wb-node::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.15);
+  border-radius: 3px;
+}
+.wb-node::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .wb-node.text-node {
@@ -156,8 +168,9 @@
   border-color: rgba(108, 140, 255, 0.3);
 }
 
-.wb-node:hover {
+.wb-node:hover:not(.dragging) {
   z-index: 3;
+  overflow-y: auto;
 }
 
 .wb-node.selected {

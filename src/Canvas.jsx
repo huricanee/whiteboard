@@ -1785,7 +1785,8 @@ export default function Canvas({
           left: node.x,
           top: node.y,
           width: node.width || 220,
-          minHeight: node.style === 'text' ? 20 : height,
+          height: node.style === 'text' ? undefined : height,
+          minHeight: node.style === 'text' ? 20 : undefined,
           borderColor: node.style === 'text' ? 'transparent' : color,
           boxShadow: node.style === 'text' ? 'none' : `0 0 ${isSelected || isInSelection ? 20 : 12}px ${isSelected || isInSelection ? 4 : 2}px ${color}22, inset 0 0 ${isSelected || isInSelection ? 16 : 8}px ${color}08`,
         }}
@@ -1810,17 +1811,7 @@ export default function Canvas({
             onFocus={() => { if (isMobile) { onSelect(node.id, 'node'); setEditingNodeId(node.id); editingRef.current = node.id; } }}
             onBlur={(e) => onTextBlur(e, node.id)}
             onKeyDown={(e) => onTextKeyDown(e, node.id)}
-            onInput={(e) => {
-              const el = e.target.closest('.wb-node');
-              if (el) {
-                el.style.minHeight = 'auto';
-                const natural = el.offsetHeight;
-                const snapped = Math.max(60, Math.ceil(natural / GRID_SIZE) * GRID_SIZE);
-                el.style.minHeight = snapped + 'px';
-                nodeHeightRef.current[node.id] = snapped;
-                setNodeHeightMap((prev) => ({ ...prev, [node.id]: snapped }));
-              }
-            }}
+            onInput={() => {}}
           >
             {node.text}
           </span>
