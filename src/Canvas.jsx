@@ -311,6 +311,9 @@ export default function Canvas({
   isMobile,
   onUpdateArrow,
   sourceMode,
+  regions = {},
+  onUpdateRegion,
+  onRegionDragEnd,
 }) {
   const rootRef = useRef(null);
   const transformRef = useRef(null);
@@ -956,6 +959,10 @@ export default function Canvas({
 
   /* ---- Eraser perform ref (set below, used in event handlers) ---- */
   const performEraseRef = useRef(null);
+  const onUpdateRegionRef = useRef(onUpdateRegion);
+  useEffect(() => { onUpdateRegionRef.current = onUpdateRegion; }, [onUpdateRegion]);
+  const onRegionDragEndRef = useRef(onRegionDragEnd);
+  useEffect(() => { onRegionDragEndRef.current = onRegionDragEnd; }, [onRegionDragEnd]);
 
   const onCanvasMouseDown = useCallback((e) => {
     if (e.button !== 0 && e.button !== 1) return;
@@ -1153,6 +1160,28 @@ export default function Canvas({
       snapAnchor: null,
     });
   }, [screenToWorld]);
+
+  /* ================================================================
+     Mouse down on region border -> drag or resize region
+     ================================================================ */
+  const onRegionBorderMouseDown = useCallback((e, regionId) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onSelect(regionId, 'region');
+    const region = regions[regionId];
+    if (!region) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    dragState.current = { type: 'regionDrag', regionId, offsetX: world.x - region.x, offsetY: world.y - region.y };
+  }, [regions, onSelect, screenToWorld]);
+
+  const onRegionResizeMouseDown = useCallback((e, regionId, corner) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const region = regions[regionId];
+    if (!region) return;
+    dragState.current = { type: 'regionResize', regionId, corner, startX: region.x, startY: region.y, startW: region.w, startH: region.h, startMouseX: e.clientX, startMouseY: e.clientY };
+  }, [regions]);
 
   /* ================================================================
      Mouse down on a resize handle -> start resizing node
@@ -1373,6 +1402,23 @@ export default function Canvas({
         onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW });
         nodeHeightRef.current[ds.nodeId] = newH;
         setNodeHeightMap(prev => ({ ...prev, [ds.nodeId]: newH }));
+      } else if (ds.type === 'regionDrag') {
+        const vp = vpRef.current;
+        const wx = (mx - vp.panX) / vp.zoom;
+        const wy = (my - vp.panY) / vp.zoom;
+        onUpdateRegionRef.current(ds.regionId, { x: snap(wx - ds.offsetX), y: snap(wy - ds.offsetY) });
+      } else if (ds.type === 'regionResize') {
+        const vp = vpRef.current;
+        const dx = (e.clientX - ds.startMouseX) / vp.zoom;
+        const dy = (e.clientY - ds.startMouseY) / vp.zoom;
+        const MIN_S = 60;
+        const farR = ds.startX + ds.startW, farB = ds.startY + ds.startH;
+        let newW = ds.startW, newH = ds.startH, newX = ds.startX, newY = ds.startY;
+        if (ds.corner === 'se') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); }
+        else if (ds.corner === 'sw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH + dy)); newX = farR - newW; }
+        else if (ds.corner === 'ne') { newW = snap(Math.max(MIN_S, ds.startW + dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newY = farB - newH; }
+        else if (ds.corner === 'nw') { newW = snap(Math.max(MIN_S, ds.startW - dx)); newH = snap(Math.max(MIN_S, ds.startH - dy)); newX = farR - newW; newY = farB - newH; }
+        onUpdateRegionRef.current(ds.regionId, { x: newX, y: newY, w: newW, h: newH });
       }
     }
 
@@ -1408,7 +1454,10 @@ export default function Canvas({
         onSelectionDragEnd();
       }
       if (ds && ds.type === 'resize') {
-        onNodeDragEnd(); // push history snapshot
+        onNodeDragEnd();
+      }
+      if (ds && (ds.type === 'regionDrag' || ds.type === 'regionResize')) {
+        onRegionDragEndRef.current();
       }
       if (ds && ds.type === 'arrow') {
         setArrowPreview((prev) => {
@@ -1835,6 +1884,29 @@ export default function Canvas({
           transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
         }}
       >
+        {/* Regions layer */}
+        <div className="region-layer">
+          {Object.values(regions).map((region) => {
+            const isRegionSelected = selectedType === 'region' && selectedId === region.id;
+            const color = region.color || '#6c8cff';
+            return (
+              <div key={region.id} className={`wb-region${isRegionSelected ? ' selected' : ''}`}
+                style={{ left: region.x, top: region.y, width: region.w, height: region.h, '--region-color': color }}>
+                <span className="region-label" contentEditable suppressContentEditableWarning style={{ color }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onBlur={(e) => onUpdateRegionRef.current(region.id, { label: e.target.textContent || '' })}>
+                  {region.label || ''}
+                </span>
+                <div className="region-border-hit" onMouseDown={(e) => onRegionBorderMouseDown(e, region.id)} />
+                {isRegionSelected && ['nw', 'ne', 'sw', 'se'].map((corner) => (
+                  <div key={corner} className={`resize-handle ${corner}`} style={{ background: color }}
+                    onMouseDown={(e) => onRegionResizeMouseDown(e, region.id, corner)} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+
         <svg className="arrow-layer" width="20000" height="20000" viewBox="0 0 20000 20000">
           {arrowElements}
         </svg>
