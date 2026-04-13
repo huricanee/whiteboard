@@ -16,7 +16,7 @@ const ANCHORS = ['top', 'right', 'bottom', 'left'];
    ================================================================ */
 function getAnchorPos(node, anchor, heightMap) {
   const w = node.width || 220;
-  const h = (heightMap && heightMap[node.id]) || 60;
+  const h = node.height || (heightMap && heightMap[node.id]) || 60;
   switch (anchor) {
     case 'top':    return { x: node.x + w / 2, y: node.y };
     case 'right':  return { x: node.x + w,     y: node.y + h / 2 };
@@ -154,7 +154,7 @@ function strokeHitsCircle(stroke, cx, cy, radius) {
    ================================================================ */
 function nodeHitsCircle(node, cx, cy, radius, heightMap) {
   const w = node.width || 220;
-  const h = (heightMap && heightMap[node.id]) || 60;
+  const h = node.height || (heightMap && heightMap[node.id]) || 60;
   // Closest point on rect to circle center
   const closestX = Math.max(node.x, Math.min(cx, node.x + w));
   const closestY = Math.max(node.y, Math.min(cy, node.y + h));
@@ -1399,9 +1399,7 @@ export default function Canvas({
           newY = snap(ds.startY + ds.startH - newH);
         }
 
-        onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW });
-        nodeHeightRef.current[ds.nodeId] = newH;
-        setNodeHeightMap(prev => ({ ...prev, [ds.nodeId]: newH }));
+        onUpdateNode(ds.nodeId, { x: newX, y: newY, width: newW, height: newH });
       } else if (ds.type === 'regionDrag') {
         const vp = vpRef.current;
         const wx = (mx - vp.panX) / vp.zoom;
@@ -1774,7 +1772,7 @@ export default function Canvas({
     const isDragging = draggingNodeId === node.id;
     const isInSelection = selection.nodeIds.has(node.id);
     const color = node.color || '#6c8cff';
-    const height = nodeHeightMap[node.id] || 60;
+    const height = node.height || nodeHeightMap[node.id] || 60;
 
     return (
       <div
