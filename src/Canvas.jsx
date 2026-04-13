@@ -389,6 +389,9 @@ export default function Canvas({
     const el = rootRef.current;
     if (!el) return;
 
+    // Debounce: sync React state after wheel stops (not on every event)
+    let wheelSyncTimer = null;
+
     function onWheel(e) {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
@@ -398,12 +401,27 @@ export default function Canvas({
         const factor = e.deltaY < 0 ? ZOOM_IN_FACTOR : ZOOM_OUT_FACTOR;
         applyZoom(factor, mx, my);
       } else {
+        // Update DOM directly — no React re-render per wheel event.
+        // Mac trackpad generates dozens of wheel events per second;
+        // calling setState on each one causes React to diff 30+ KaTeX
+        // DOM trees per frame, causing severe lag.
         const vp = vpRef.current;
-        onUpdateViewport({
-          ...vp,
-          panX: vp.panX - e.deltaX,
-          panY: vp.panY - e.deltaY,
-        });
+        const newPanX = vp.panX - e.deltaX;
+        const newPanY = vp.panY - e.deltaY;
+        vpRef.current = { ...vp, panX: newPanX, panY: newPanY };
+        if (transformRef.current) {
+          transformRef.current.style.transform = `translate(${newPanX}px, ${newPanY}px) scale(${vp.zoom})`;
+        }
+        const gridEl = el.querySelector('.canvas-grid');
+        if (gridEl) {
+          const gs = GRID_SIZE * vp.zoom;
+          gridEl.style.backgroundPosition = `${newPanX % gs}px ${newPanY % gs}px`;
+        }
+        // Sync React state after scrolling stops (150ms debounce)
+        clearTimeout(wheelSyncTimer);
+        wheelSyncTimer = setTimeout(() => {
+          onUpdateViewport({ ...vpRef.current });
+        }, 150);
       }
     }
 
