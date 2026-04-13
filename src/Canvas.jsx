@@ -1274,16 +1274,21 @@ export default function Canvas({
       }
 
       if (ds.type === 'pan') {
-        if (panRAF.current) cancelAnimationFrame(panRAF.current);
-        panRAF.current = requestAnimationFrame(() => {
-          const dx = mx - ds.startX;
-          const dy = my - ds.startY;
-          onUpdateViewport({
-            ...vpRef.current,
-            panX: ds.startPanX + dx,
-            panY: ds.startPanY + dy,
-          });
-        });
+        // Update transform directly via DOM — no React re-render during pan.
+        // This is critical for boards with many KaTeX nodes where React diffing
+        // 30+ complex DOM trees per frame causes severe lag.
+        const newPanX = ds.startPanX + (mx - ds.startX);
+        const newPanY = ds.startPanY + (my - ds.startY);
+        vpRef.current = { ...vpRef.current, panX: newPanX, panY: newPanY };
+        if (transformRef.current) {
+          transformRef.current.style.transform = `translate(${newPanX}px, ${newPanY}px) scale(${vpRef.current.zoom})`;
+        }
+        // Update grid background position directly
+        const gridEl = rootRef.current?.querySelector('.canvas-grid');
+        if (gridEl) {
+          const gs = GRID_SIZE * vpRef.current.zoom;
+          gridEl.style.backgroundPosition = `${newPanX % gs}px ${newPanY % gs}px`;
+        }
       } else if (ds.type === 'node') {
         const vp = vpRef.current;
         const worldX = (mx - vp.panX) / vp.zoom;
@@ -1364,6 +1369,8 @@ export default function Canvas({
       }
       if (ds && ds.type === 'pan') {
         rootRef.current?.classList.remove('panning');
+        // Sync React state with the DOM-driven pan position
+        onUpdateViewport({ ...vpRef.current });
       }
       if (ds && ds.type === 'node') {
         setDraggingNodeId(null);
