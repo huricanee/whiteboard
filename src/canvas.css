@@ -225,11 +225,9 @@
   pointer-events: none;
 }
 
-/* LaTeX rendered view: override the fixed line-height from .node-text
-   so formulas (fractions, integrals, etc.) can expand to natural height */
+/* LaTeX rendered view */
 .wb-node .node-text-rendered {
   cursor: pointer;
-  line-height: normal;
 }
 
 .wb-node .node-text-rendered .katex {
@@ -239,13 +237,20 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Display math: KaTeX positions fraction numerators with negative offsets
+   relative to the baseline. The default line-height:1.5 from .node-text
+   clips the top. Override to line-height:normal and add padding so the
+   full formula is visible. */
 .wb-node .node-text-rendered .katex-display {
-  margin: 0.5em 0;
+  margin: 0;
+  padding: 0.3em 0;
   text-align: inherit !important;
+  line-height: normal;
 }
 
 .wb-node .node-text-rendered .katex-display > .katex {
   text-align: inherit !important;
+  line-height: normal;
 }
 
 /* ============================================================
