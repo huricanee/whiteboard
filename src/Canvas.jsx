@@ -373,16 +373,32 @@ export default function Canvas({
   /* ================================================================
      Zoom (mouse-centric)
      ================================================================ */
+  // Debounce timer for syncing zoom to React state
+  const zoomSyncTimer = useRef(null);
+
   const applyZoom = useCallback((factor, cx, cy) => {
     const vp = vpRef.current;
     let newZoom = vp.zoom * factor;
     newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
     const scale = newZoom / vp.zoom;
-    onUpdateViewport({
-      zoom: newZoom,
-      panX: cx - (cx - vp.panX) * scale,
-      panY: cy - (cy - vp.panY) * scale,
-    });
+    const newPanX = cx - (cx - vp.panX) * scale;
+    const newPanY = cy - (cy - vp.panY) * scale;
+    // Update vpRef + DOM directly (no React re-render per zoom frame)
+    vpRef.current = { zoom: newZoom, panX: newPanX, panY: newPanY };
+    if (transformRef.current) {
+      transformRef.current.style.transform = `translate(${newPanX}px, ${newPanY}px) scale(${newZoom})`;
+    }
+    const gridEl = rootRef.current?.querySelector('.canvas-grid');
+    if (gridEl) {
+      const gs = GRID_SIZE * newZoom;
+      gridEl.style.backgroundSize = `${gs}px ${gs}px`;
+      gridEl.style.backgroundPosition = `${newPanX % gs}px ${newPanY % gs}px`;
+    }
+    // Debounce React state sync
+    clearTimeout(zoomSyncTimer.current);
+    zoomSyncTimer.current = setTimeout(() => {
+      onUpdateViewport({ ...vpRef.current });
+    }, 150);
   }, [onUpdateViewport]);
 
   /* ================================================================
@@ -1172,7 +1188,31 @@ export default function Canvas({
     if (!region) return;
     const rect = rootRef.current.getBoundingClientRect();
     const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
-    dragState.current = { type: 'regionDrag', regionId, offsetX: world.x - region.x, offsetY: world.y - region.y };
+
+    // Find all objects inside this region's bounds
+    const currentNodes = nodesRef.current;
+    const currentRegions = regions;
+    const containedNodes = [];
+    const containedRegions = [];
+    for (const n of Object.values(currentNodes)) {
+      if (n.x >= region.x && n.y >= region.y &&
+          n.x + (n.width || 220) <= region.x + region.w &&
+          n.y + (n.height || 60) <= region.y + region.h) {
+        containedNodes.push({ id: n.id, dx: n.x - region.x, dy: n.y - region.y });
+      }
+    }
+    for (const r of Object.values(currentRegions)) {
+      if (r.id !== regionId && r.x >= region.x && r.y >= region.y &&
+          r.x + r.w <= region.x + region.w && r.y + r.h <= region.y + region.h) {
+        containedRegions.push({ id: r.id, dx: r.x - region.x, dy: r.y - region.y });
+      }
+    }
+
+    dragState.current = {
+      type: 'regionDrag', regionId,
+      offsetX: world.x - region.x, offsetY: world.y - region.y,
+      containedNodes, containedRegions,
+    };
   }, [regions, onSelect, screenToWorld]);
 
   const onRegionResizeMouseDown = useCallback((e, regionId, corner) => {
@@ -1342,7 +1382,14 @@ export default function Canvas({
         const worldY = (my - vp.panY) / vp.zoom;
         const newX = snap(worldX - ds.offsetX);
         const newY = snap(worldY - ds.offsetY);
-        onUpdateNode(ds.nodeId, { x: newX, y: newY });
+        // DOM-direct positioning (no React re-render per frame)
+        const nodeEl = nodeElsRef.current[ds.nodeId];
+        if (nodeEl) {
+          nodeEl.style.left = newX + 'px';
+          nodeEl.style.top = newY + 'px';
+        }
+        ds.lastX = newX;
+        ds.lastY = newY;
       } else if (ds.type === 'arrow') {
         const vp = vpRef.current;
         const worldX = (mx - vp.panX) / vp.zoom;
@@ -1404,7 +1451,20 @@ export default function Canvas({
         const vp = vpRef.current;
         const wx = (mx - vp.panX) / vp.zoom;
         const wy = (my - vp.panY) / vp.zoom;
-        onUpdateRegionRef.current(ds.regionId, { x: snap(wx - ds.offsetX), y: snap(wy - ds.offsetY) });
+        const newRegX = snap(wx - ds.offsetX);
+        const newRegY = snap(wy - ds.offsetY);
+        onUpdateRegionRef.current(ds.regionId, { x: newRegX, y: newRegY });
+        // Move contained objects with the region
+        if (ds.containedNodes) {
+          for (const cn of ds.containedNodes) {
+            onUpdateNode(cn.id, { x: newRegX + cn.dx, y: newRegY + cn.dy });
+          }
+        }
+        if (ds.containedRegions) {
+          for (const cr of ds.containedRegions) {
+            onUpdateRegionRef.current(cr.id, { x: newRegX + cr.dx, y: newRegY + cr.dy });
+          }
+        }
       } else if (ds.type === 'regionResize') {
         const vp = vpRef.current;
         const dx = (e.clientX - ds.startMouseX) / vp.zoom;
@@ -1435,6 +1495,10 @@ export default function Canvas({
         onUpdateViewport({ ...vpRef.current });
       }
       if (ds && ds.type === 'node') {
+        // Sync final position to React state
+        if (ds.lastX !== undefined) {
+          onUpdateNode(ds.nodeId, { x: ds.lastX, y: ds.lastY });
+        }
         setDraggingNodeId(null);
         onNodeDragEnd();
       }
