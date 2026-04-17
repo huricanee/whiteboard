@@ -417,7 +417,11 @@ export default function Canvas({
         const rect = el.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
-        const factor = e.deltaY < 0 ? ZOOM_IN_FACTOR : ZOOM_OUT_FACTOR;
+        // Scale zoom by event magnitude so trackpad pinch (many small events)
+        // and mouse wheel (few large events) both feel gentle.
+        // exp(-dy * k) is smooth and symmetric; k tuned low for trackpad.
+        const dy = Math.max(-50, Math.min(50, e.deltaY));
+        const factor = Math.exp(-dy * 0.0035);
         applyZoom(factor, mx, my);
       } else {
         // Update DOM directly — no React re-render per wheel event.
